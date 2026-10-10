@@ -1,0 +1,3805 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Frostbay</title>
+<meta name="description" content="A cold harbour kept in a glass block on a bed of jelly: a live WebGPU water simulation with seals, a kayak and a humpback whale.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,400;1,500&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: full-bleed WebGPU stage; masthead top-left, control panel top-right,
+   readouts and hints along the bottom. Mobile stacks into a bottom sheet. */
+:root {
+  --ink: #1c2126;
+  --ink-soft: rgba(28, 33, 38, 0.62);
+  --ink-faint: rgba(28, 33, 38, 0.38);
+  --line: rgba(28, 33, 38, 0.13);
+  --panel: rgba(247, 246, 243, 0.74);
+  --chip: rgba(255, 255, 255, 0.58);
+  --accent: #2d4b5e;
+  --accent-ink: #f4f6f7;
+  --live: #3f8a68;
+  --stage: #dcdbd7;
+  --serif: 'Cormorant Garamond', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --sans: 'IBM Plex Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+body[data-mode="snow"] { --stage: #c9ced3; }
+body[data-mode="aurora"] {
+  --ink: #e6ecf3;
+  --ink-soft: rgba(230, 236, 243, 0.64);
+  --ink-faint: rgba(230, 236, 243, 0.38);
+  --line: rgba(230, 236, 243, 0.15);
+  --panel: rgba(12, 18, 32, 0.6);
+  --chip: rgba(22, 31, 52, 0.62);
+  --accent: #b9dfcb;
+  --accent-ink: #0b1420;
+  --live: #8fe0b4;
+  --stage: #05070e;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body {
+  background: var(--stage);
+  color: var(--ink);
+  font: 400 14px/1.45 var(--sans);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.8s ease, color 0.8s ease;
+}
+#stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+#stage.is-dragging { cursor: grabbing; }
+#stage.can-press { cursor: crosshair; }
+#stage.can-grab { cursor: grab; }
+
+.ui { position: fixed; inset: 0; pointer-events: none; padding: max(22px, env(safe-area-inset-top)) max(26px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(26px, env(safe-area-inset-left)); }
+.ui > * { pointer-events: auto; }
+
+.masthead { position: absolute; top: max(22px, env(safe-area-inset-top)); left: max(26px, env(safe-area-inset-left)); max-width: min(440px, 46vw); pointer-events: none; }
+.masthead h1 {
+  margin: 0;
+  font: italic 500 clamp(64px, 8.6vw, 124px)/0.86 var(--serif);
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+.masthead p { margin: 14px 0 0; max-width: 36ch; color: var(--ink-soft); font-size: 15px; line-height: 1.5; }
+.status {
+  display: inline-flex; align-items: center; gap: 8px; margin-top: 16px;
+  padding: 6px 12px 6px 10px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--chip); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  font: 500 12px/1 var(--mono); letter-spacing: 0.02em; color: var(--ink);
+  pointer-events: auto;
+}
+.status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 0 var(--live); animation: pulse 2.4s ease-out infinite; }
+.status.is-paused .dot { background: var(--ink-faint); animation: none; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 55%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+.panel {
+  position: absolute; top: max(22px, env(safe-area-inset-top)); right: max(22px, env(safe-area-inset-right)); width: 292px;
+  padding: 16px 16px 14px; border-radius: 16px; border: 1px solid var(--line);
+  background: var(--panel); backdrop-filter: blur(16px) saturate(1.1); -webkit-backdrop-filter: blur(16px) saturate(1.1);
+  box-shadow: 0 18px 50px -28px rgba(20, 30, 40, 0.35);
+}
+.panel-toggle { display: none; }
+.panel-body { display: grid; gap: 14px; }
+.group { display: grid; gap: 8px; }
+.label { font: 500 10.5px/1 var(--sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); display: flex; justify-content: space-between; align-items: baseline; }
+.label output { font: 500 11px/1 var(--mono); letter-spacing: 0; text-transform: none; color: var(--ink); }
+.segments { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; padding: 3px; border-radius: 11px; background: var(--chip); border: 1px solid var(--line); }
+.segments button { border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); font: 500 12.5px/1 var(--sans); padding: 9px 4px; min-height: 34px; cursor: pointer; transition: background-color 0.2s, color 0.2s; }
+.segments button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; }
+.row span { font-size: 13px; }
+.switch { position: relative; width: 44px; height: 26px; border-radius: 999px; border: 1px solid var(--line); background: var(--chip); cursor: pointer; padding: 0; flex: none; transition: background-color 0.2s; }
+.switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--ink-soft); transition: transform 0.22s ease, background-color 0.2s; }
+.switch[aria-checked="true"] { background: var(--accent); }
+.switch[aria-checked="true"]::after { transform: translateX(18px); background: var(--accent-ink); }
+input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: transparent; margin: 0; cursor: pointer; }
+input[type="range"]::-webkit-slider-runnable-track { height: 3px; border-radius: 3px; background: var(--line); }
+input[type="range"]::-moz-range-track { height: 3px; border-radius: 3px; background: var(--line); }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6.5px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); box-shadow: 0 1px 4px rgba(0,0,0,0.2); }
+input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); }
+.actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.btn { border: 1px solid var(--line); background: var(--chip); color: var(--ink); border-radius: 10px; font: 500 12.5px/1 var(--sans); padding: 10px 6px; min-height: 36px; cursor: pointer; transition: background-color 0.2s, border-color 0.2s, color 0.2s; }
+.btn:hover { border-color: var(--ink-faint); }
+.btn.primary { grid-column: 1 / -1; background: var(--accent); color: var(--accent-ink); border-color: transparent; font-size: 13.5px; min-height: 40px; }
+.btn[aria-pressed="true"] { background: var(--ink); color: var(--stage); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.readouts {
+  position: absolute; left: max(26px, env(safe-area-inset-left)); bottom: max(20px, env(safe-area-inset-bottom));
+  display: grid; grid-template-columns: repeat(4, minmax(0, auto)); gap: 4px 26px; pointer-events: none;
+}
+.readout { min-width: 0; }
+.readout dt { font: 500 10px/1 var(--sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px; }
+.readout dd { margin: 0; font: 400 12.5px/1.3 var(--mono); color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hints { position: absolute; right: max(26px, env(safe-area-inset-right)); bottom: max(20px, env(safe-area-inset-bottom)); max-width: 380px; text-align: right; color: var(--ink-faint); font-size: 12px; line-height: 1.55; pointer-events: none; }
+.hints b { font-weight: 500; color: var(--ink-soft); }
+
+.fallback { position: fixed; inset: 0; display: none; place-items: center; padding: 24px; background: var(--stage); z-index: 5; }
+.fallback.is-shown { display: grid; }
+.fallback .card { max-width: 460px; padding: 28px 28px 24px; border-radius: 18px; border: 1px solid var(--line); background: var(--panel); }
+.fallback h2 { margin: 0 0 10px; font: italic 500 40px/1 var(--serif); }
+.fallback p { margin: 0 0 12px; color: var(--ink-soft); }
+.fallback ul { margin: 0 0 12px; padding-left: 18px; color: var(--ink-soft); }
+.fallback code { font: 12px/1.4 var(--mono); color: var(--ink); word-break: break-word; }
+
+.panel-hint { display: none; margin: 0; font-size: 12px; line-height: 1.5; color: var(--ink-soft); }
+@media (max-width: 1260px) {
+  .hints { display: none; }
+  .panel-hint { display: block; }
+}
+@media (max-width: 760px) {
+  .ui { padding: 0; }
+  .masthead { top: max(14px, env(safe-area-inset-top)); left: 16px; right: 16px; max-width: none; }
+  .masthead h1 { font-size: 56px; }
+  .masthead p { font-size: 13.5px; margin-top: 8px; max-width: 30ch; }
+  .status { margin-top: 10px; min-height: 32px; }
+  .hints { display: none; }
+  .readouts {
+    left: 16px; right: 16px; bottom: calc(var(--sheet-h, 64px) + 10px + env(safe-area-inset-bottom));
+    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px;
+    padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--chip);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  .readout dd { font-size: 12px; white-space: normal; }
+  .panel {
+    top: auto; right: 0; left: 0; bottom: 0; width: auto; border-radius: 18px 18px 0 0; border-bottom: 0;
+    padding: 6px 16px calc(12px + env(safe-area-inset-bottom));
+  }
+  .panel-toggle {
+    display: flex; width: 100%; align-items: center; justify-content: space-between; min-height: 48px;
+    border: 0; background: transparent; color: var(--ink); font: 600 14px/1 var(--sans); padding: 0 2px; cursor: pointer;
+  }
+  .panel-toggle .chev { transition: transform 0.25s ease; font-size: 18px; color: var(--ink-soft); }
+  .panel[data-open="true"] .panel-toggle .chev { transform: rotate(180deg); }
+  .panel-body { max-height: 0; overflow: hidden; transition: max-height 0.3s ease; display: flex; flex-direction: column; gap: 14px; }
+  .panel[data-open="true"] .panel-body { max-height: 52vh; overflow-y: auto; padding-bottom: 4px; }
+  .panel .actions { order: -1; }
+  body.sheet-open .masthead p, body.sheet-open .masthead .status { display: none; }
+  body.sheet-open .masthead h1 { font-size: 44px; }
+  .panel[data-open="true"] ~ .readouts { display: none; }
+  .segments button, .btn, .btn.primary, .row { min-height: 44px; }
+  .switch { width: 64px; height: 44px; }
+  .switch::after { top: 4px; left: 4px; width: 34px; height: 34px; }
+  .switch[aria-checked="true"]::after { transform: translateX(20px); }
+  input[type="range"] { height: 44px; }
+  input[type="range"]::-webkit-slider-thumb { width: 26px; height: 26px; margin-top: -11.5px; }
+  input[type="range"]::-moz-range-thumb { width: 24px; height: 24px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body data-mode="day">
+<canvas id="stage" aria-label="Frostbay diorama: a glass block of sea on jelly, with an island, seals, a kayak and a whale"></canvas>
+
+<div class="ui">
+  <header class="masthead">
+    <h1>Frostbay.</h1>
+    <p>A small cold harbour kept in a glass block on a bed of jelly. Seals doze, a kayak drifts, and something large keeps to the deep water.</p>
+    <div class="status" id="status" role="status"><span class="dot"></span><span id="statusText">Live · sea at 180 Hz</span></div>
+  </header>
+
+  <section class="panel" id="panel" data-open="false" aria-label="Controls">
+    <button class="panel-toggle" id="panelToggle" aria-expanded="false" aria-controls="panelBody"><span>Controls</span><span class="chev" aria-hidden="true">⌃</span></button>
+    <div class="panel-body" id="panelBody">
+      <div class="group">
+        <div class="label">Weather</div>
+        <div class="segments" role="group" aria-label="Weather">
+          <button data-mode="day" aria-pressed="true">Daylight</button>
+          <button data-mode="snow" aria-pressed="false">Snowfall</button>
+          <button data-mode="aurora" aria-pressed="false">Aurora</button>
+        </div>
+        <div class="row"><span id="blizzardLabel">Blizzard</span><button class="switch" id="blizzard" role="switch" aria-checked="false" aria-labelledby="blizzardLabel"></button></div>
+      </div>
+      <div class="group">
+        <label class="label" for="firmness">Jelly firmness <output id="firmnessOut">50%</output></label>
+        <input type="range" id="firmness" min="0" max="100" value="50">
+        <label class="label" for="damping">Wave damping <output id="dampingOut">25%</output></label>
+        <input type="range" id="damping" min="0" max="100" value="25">
+        <label class="label" for="tide">Tide <output id="tideOut">±0 cm</output></label>
+        <input type="range" id="tide" min="-12" max="12" value="0">
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="callWhale">Call the whale</button>
+        <button class="btn" id="pause" aria-pressed="false">Pause</button>
+        <button class="btn" id="reset">Reset</button>
+        <button class="btn" id="camera">Camera</button>
+      </div>
+      <p class="panel-hint">Press or drag the sea for waves. Drag a glass side to tilt the block, pull the jelly, drag the kayak. Double-click or double-tap for the whale.</p>
+    </div>
+  </section>
+
+  <dl class="readouts" aria-live="off">
+    <div class="readout"><dt>Seal</dt><dd id="roSeal">On the raft</dd></div>
+    <div class="readout"><dt>Kayak</dt><dd id="roKayak">Upright</dd></div>
+    <div class="readout"><dt>Whale</dt><dd id="roWhale">Cruising</dd></div>
+    <div class="readout"><dt>Swell</dt><dd id="roSwell">Calm · 0 cm</dd></div>
+  </dl>
+
+  <p class="hints"><b>Press</b> the sea to push a hollow · <b>drag</b> to sweep it · drag a <b>glass side</b> to tilt the block · pull the <b>jelly</b> · drag the <b>kayak</b> · <b>double-click</b> to call the whale · drag the backdrop to orbit, scroll to zoom</p>
+</div>
+
+<div class="fallback" id="fallback" role="alert">
+  <div class="card">
+    <h2>Frostbay needs WebGPU</h2>
+    <p id="fallbackReason">This browser did not give the page a WebGPU device, so the water simulation and renderer cannot start.</p>
+    <ul>
+      <li>Safari 26 or later on macOS, iOS or iPadOS</li>
+      <li>Chrome or Edge 113 or later on desktop, Chrome 121 or later on Android</li>
+      <li>Firefox 141 or later on Windows</li>
+    </ul>
+    <p>If you are on one of these, check that hardware acceleration is turned on.</p>
+    <p><code id="fallbackDetail"></code></p>
+  </div>
+</div>
+
+<script type="module">
+// ============================================================================
+// Frostbay — core constants, math, noise, bathymetry and mesh building
+// Tank-local frame: x right (10 m), z toward the viewer (7 m), y up.
+// Still-water level is y = 0 (plus tide). The glass block sits on jelly.
+// ============================================================================
+const NX = 200, NZ = 140, DX = 0.05;
+const TW = NX * DX, TD = NZ * DX;          // 10 x 7
+const HX = TW / 2, HZ = TD / 2;
+const BLOCK_BOTTOM = -2.0, RIM = 0.5, GLASS_T = 0.05;
+const JELLY_TOP = BLOCK_BOTTOM, JELLY_BOTTOM = -2.45, JELLY_HX = 5.32, JELLY_HZ = 3.82;
+const FLOOR_Y = JELLY_BOTTOM;
+const GRAV = 6.0;                         // long-wave gravity (diorama scale)
+const SIM_HZ = 180, SIM_DT = 1 / SIM_HZ;
+const DMAX = 2.6, VMAX = 2.0, FRICTION = 0.015;
+const TAU = Math.PI * 2;
+
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth01 = (t) => { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); };
+const sstep = (a, b, x) => smooth01((x - a) / (b - a));
+const wrapAngle = (a) => { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; };
+const expDecay = (dt, tau) => 1 - Math.exp(-dt / tau);
+
+const V3 = {
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  mul: (a, s) => [a[0] * s, a[1] * s, a[2] * s],
+  madd: (a, b, s) => [a[0] + b[0] * s, a[1] + b[1] * s, a[2] + b[2] * s],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  len: (a) => Math.hypot(a[0], a[1], a[2]),
+  norm: (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; },
+  lerp: (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t],
+  // Rotate v about unit axis k by angle a (Rodrigues).
+  rot: (v, k, a) => {
+    const c = Math.cos(a), s = Math.sin(a), d = V3.dot(k, v) * (1 - c), x = V3.cross(k, v);
+    return [v[0] * c + x[0] * s + k[0] * d, v[1] * c + x[1] * s + k[1] * d, v[2] * c + x[2] * s + k[2] * d];
+  },
+};
+
+// Column-major 4x4 matrices (WebGPU clip z in [0, 1]).
+const M4 = {
+  ident: () => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+  mul(a, b) {
+    const o = new Float32Array(16);
+    for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+      o[c * 4 + r] = a[r] * b[c * 4] + a[4 + r] * b[c * 4 + 1] + a[8 + r] * b[c * 4 + 2] + a[12 + r] * b[c * 4 + 3];
+    }
+    return o;
+  },
+  perspective(fovy, aspect, near, far, shiftX = 0, shiftY = 0) {
+    const f = 1 / Math.tan(fovy / 2), o = new Float32Array(16);
+    o[0] = f / aspect; o[5] = f; o[8] = -shiftX; o[9] = -shiftY;
+    o[10] = far / (near - far); o[11] = -1; o[14] = (near * far) / (near - far);
+    return o;
+  },
+  ortho(l, r, b, t, n, f) {
+    const o = new Float32Array(16);
+    o[0] = 2 / (r - l); o[5] = 2 / (t - b); o[10] = 1 / (n - f);
+    o[12] = -(r + l) / (r - l); o[13] = -(t + b) / (t - b); o[14] = n / (n - f); o[15] = 1;
+    return o;
+  },
+  lookAt(eye, at, up) {
+    const z = V3.norm(V3.sub(eye, at)), x = V3.norm(V3.cross(up, z)), y = V3.cross(z, x);
+    return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0,
+      -V3.dot(x, eye), -V3.dot(y, eye), -V3.dot(z, eye), 1]);
+  },
+  invert(m) {
+    const o = new Float32Array(16);
+    const a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3], a10 = m[4], a11 = m[5], a12 = m[6], a13 = m[7];
+    const a20 = m[8], a21 = m[9], a22 = m[10], a23 = m[11], a30 = m[12], a31 = m[13], a32 = m[14], a33 = m[15];
+    const b00 = a00 * a11 - a01 * a10, b01 = a00 * a12 - a02 * a10, b02 = a00 * a13 - a03 * a10;
+    const b03 = a01 * a12 - a02 * a11, b04 = a01 * a13 - a03 * a11, b05 = a02 * a13 - a03 * a12;
+    const b06 = a20 * a31 - a21 * a30, b07 = a20 * a32 - a22 * a30, b08 = a20 * a33 - a23 * a30;
+    const b09 = a21 * a32 - a22 * a31, b10 = a21 * a33 - a23 * a31, b11 = a22 * a33 - a23 * a32;
+    let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+    if (!det) return M4.ident();
+    det = 1 / det;
+    o[0] = (a11 * b11 - a12 * b10 + a13 * b09) * det; o[1] = (a02 * b10 - a01 * b11 - a03 * b09) * det;
+    o[2] = (a31 * b05 - a32 * b04 + a33 * b03) * det; o[3] = (a22 * b04 - a21 * b05 - a23 * b03) * det;
+    o[4] = (a12 * b08 - a10 * b11 - a13 * b07) * det; o[5] = (a00 * b11 - a02 * b08 + a03 * b07) * det;
+    o[6] = (a32 * b02 - a30 * b05 - a33 * b01) * det; o[7] = (a20 * b05 - a22 * b02 + a23 * b01) * det;
+    o[8] = (a10 * b10 - a11 * b08 + a13 * b06) * det; o[9] = (a01 * b08 - a00 * b10 - a03 * b06) * det;
+    o[10] = (a30 * b04 - a31 * b02 + a33 * b00) * det; o[11] = (a21 * b02 - a20 * b04 - a23 * b00) * det;
+    o[12] = (a11 * b07 - a10 * b09 - a12 * b06) * det; o[13] = (a00 * b09 - a01 * b07 + a02 * b06) * det;
+    o[14] = (a31 * b01 - a30 * b03 - a32 * b00) * det; o[15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
+    return o;
+  },
+  // Rotation (about x then z, i.e. R = Rz * Rx) around a pivot, then translation.
+  pivotRT(rx, rz, pivot, t) {
+    const cx = Math.cos(rx), sx = Math.sin(rx), cz = Math.cos(rz), sz = Math.sin(rz);
+    // R = Rz * Rx
+    const r = [cz, sz, 0, -sz * cx, cz * cx, sx, sz * sx, -cz * sx, cx];
+    const o = M4.ident();
+    o[0] = r[0]; o[1] = r[1]; o[2] = r[2]; o[4] = r[3]; o[5] = r[4]; o[6] = r[5]; o[8] = r[6]; o[9] = r[7]; o[10] = r[8];
+    const p = pivot, rp = [r[0] * p[0] + r[3] * p[1] + r[6] * p[2], r[1] * p[0] + r[4] * p[1] + r[7] * p[2], r[2] * p[0] + r[5] * p[1] + r[8] * p[2]];
+    o[12] = p[0] - rp[0] + t[0]; o[13] = p[1] - rp[1] + t[1]; o[14] = p[2] - rp[2] + t[2];
+    return o;
+  },
+  point: (m, p) => [m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]],
+  dir: (m, d) => [m[0] * d[0] + m[4] * d[1] + m[8] * d[2], m[1] * d[0] + m[5] * d[1] + m[9] * d[2], m[2] * d[0] + m[6] * d[1] + m[10] * d[2]],
+  project(m, p) {
+    const x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+    const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+    return [x / w, y / w, w];
+  },
+};
+
+// Local frame helper: rotation matrix from yaw (about y), pitch (about local z, nose up), roll (about local x).
+function frameMatrix(pos, yaw, pitch, roll) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch), cr = Math.cos(roll), sr = Math.sin(roll);
+  // Forward axis is local +x mapped to (cos yaw, 0, sin yaw) after yaw; yaw measured in xz plane from +x toward +z.
+  // Build R = Ryaw * Rpitch * Rroll with Ryaw rotating +x toward +z.
+  const Ry = [cy, 0, sy, 0, 1, 0, -sy, 0, cy];             // columns: x', y', z'
+  const Rp = [cp, sp, 0, -sp, cp, 0, 0, 0, 1];              // about z: x toward y
+  const Rr = [1, 0, 0, 0, cr, sr, 0, -sr, cr];              // about x: y toward z
+  const m3 = (a, b) => {
+    const o = new Array(9);
+    for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) o[c * 3 + r] = a[r] * b[c * 3] + a[3 + r] * b[c * 3 + 1] + a[6 + r] * b[c * 3 + 2];
+    return o;
+  };
+  const R = m3(Ry, m3(Rp, Rr));
+  const o = M4.ident();
+  o[0] = R[0]; o[1] = R[1]; o[2] = R[2]; o[4] = R[3]; o[5] = R[4]; o[6] = R[5]; o[8] = R[6]; o[9] = R[7]; o[10] = R[8];
+  o[12] = pos[0]; o[13] = pos[1]; o[14] = pos[2];
+  return o;
+}
+
+// ---------------------------------------------------------------------------
+// Noise
+// ---------------------------------------------------------------------------
+function hash2(x, z) {
+  let h = Math.imul((x | 0) ^ 0x27d4eb2d, 0x165667b1) ^ Math.imul((z | 0) + 0x9e3779b9, 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h ^= h >>> 12;
+  return ((h >>> 0) % 100000) / 100000;
+}
+function vnoise(x, z) {
+  const ix = Math.floor(x), iz = Math.floor(z), fx = x - ix, fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx), uz = fz * fz * (3 - 2 * fz);
+  const a = hash2(ix, iz), b = hash2(ix + 1, iz), c = hash2(ix, iz + 1), d = hash2(ix + 1, iz + 1);
+  return lerp(lerp(a, b, ux), lerp(c, d, ux), uz);
+}
+function fbm(x, z, oct = 4) {
+  let s = 0, a = 0.5, f = 1;
+  for (let k = 0; k < oct; k++) { s += a * (vnoise(x * f + k * 17.1, z * f - k * 9.3) * 2 - 1); f *= 2.03; a *= 0.5; }
+  return s;
+}
+let rngState = 1234567;
+function rand() { rngState = (Math.imul(rngState, 1664525) + 1013904223) >>> 0; return rngState / 4294967296; }
+const randRange = (a, b) => a + (b - a) * rand();
+
+// ---------------------------------------------------------------------------
+// Bathymetry: deep cold basin, one snowy island with a shore ledge and shallows.
+// ---------------------------------------------------------------------------
+const ISLAND = { x: 2.75, z: -0.85, R: 1.22 };
+const IGLOO_POS = [2.98, 0, -1.12];
+const LANTERN_POS = [3.12, 0, 0.12];
+// The shore seal basks on the island's natural ledge (islandT ≈ 0.97), lying
+// along the shore with its head turned a little toward the water.
+const SHORE_SEAL = (() => {
+  const th = 2.55, R = ISLAND.R * (1 + 0.15 * Math.sin(th * 3 + 0.7) + 0.07 * Math.sin(th * 5 + 2.1) + 0.04 * Math.sin(th * 9 + 4.0));
+  const x = ISLAND.x + Math.cos(th) * R * 0.95, z = ISLAND.z + (Math.sin(th) * R * 0.95) / 1.12;
+  const out = Math.atan2(Math.sin(th) / 1.12, Math.cos(th));
+  return { x, z, heading: out - Math.PI / 2 + 0.45 };
+})();
+
+function islandT(x, z) {
+  const dx = x - ISLAND.x, dz = (z - ISLAND.z) * 1.12;
+  const r = Math.hypot(dx, dz), th = Math.atan2(dz, dx);
+  const R = ISLAND.R * (1 + 0.15 * Math.sin(th * 3 + 0.7) + 0.07 * Math.sin(th * 5 + 2.1) + 0.04 * Math.sin(th * 9 + 4.0));
+  return r / R;
+}
+function islandProfile(t) {
+  if (t < 0.55) return 0.46 + 0.15 * (1 - t / 0.55) ** 2;
+  if (t < 0.9) return lerp(0.46, 0.11, smooth01((t - 0.55) / 0.35));
+  if (t < 1.04) return lerp(0.11, 0.05, (t - 0.9) / 0.14);
+  if (t < 1.15) return lerp(0.05, -0.07, smooth01((t - 1.04) / 0.11));
+  if (t < 1.75) return lerp(-0.07, -0.42, smooth01((t - 1.15) / 0.6));
+  if (t < 2.45) return lerp(-0.42, -1.72, smooth01((t - 1.75) / 0.7));
+  return -1.72;
+}
+function deepFloor(x, z) {
+  return -1.64 + 0.09 * fbm(x * 0.32 + 3.1, z * 0.32 - 1.7, 3) + 0.03 * fbm(x * 1.4, z * 1.4, 2);
+}
+function groundAt(x, z) {
+  const t = islandT(x, z);
+  let g = islandProfile(t);
+  // Rocky texture on land and shallows, flattened on the seal ledge and the igloo plateau.
+  const ledge = Math.hypot(x - SHORE_SEAL.x, z - SHORE_SEAL.z);
+  const igloo = Math.hypot(x - IGLOO_POS[0], z - IGLOO_POS[2]);
+  const rough = sstep(2.0, 0.9, t) * sstep(0.2, 0.5, ledge) * sstep(0.35, 0.7, igloo);
+  g += 0.045 * fbm(x * 2.2, z * 2.2, 3) * rough;
+  if (ledge < 0.42) g = lerp(Math.max(g, 0.055), g, sstep(0.18, 0.42, ledge));
+  const d = deepFloor(x, z);
+  // Smooth max with the basin floor.
+  const k = 0.12, hdiff = clamp(0.5 + 0.5 * (g - d) / k, 0, 1);
+  return lerp(d, g, hdiff) + k * hdiff * (1 - hdiff) * 0.5;
+}
+
+// ---------------------------------------------------------------------------
+// Mesh builder. Vertex: pos3 nrm3 col3 uv2 mat1 (12 floats, 48 bytes).
+// Materials: 0 plain, 1 seal, 2 whale, 3 snow, 4 wood, 5 jelly, 6 igloo,
+// 7 emissive, 8 terrain, 9 strata, 10 kayak, 11 eye, 12 ice side
+// ---------------------------------------------------------------------------
+const FLOATS_PER_VERT = 12;
+class MeshBuilder {
+  constructor(maxVerts, maxIdx) {
+    this.v = new Float32Array(maxVerts * FLOATS_PER_VERT);
+    this.idx = new Uint32Array(maxIdx);
+    this.maxV = maxVerts; this.maxI = maxIdx;
+    this.nv = 0; this.ni = 0;
+  }
+  reset() { this.nv = 0; this.ni = 0; }
+  vert(p, n, c, u, v, m) {
+    if (this.nv >= this.maxV) return this.maxV - 1;
+    const o = this.nv * FLOATS_PER_VERT, a = this.v;
+    a[o] = p[0]; a[o + 1] = p[1]; a[o + 2] = p[2];
+    a[o + 3] = n[0]; a[o + 4] = n[1]; a[o + 5] = n[2];
+    a[o + 6] = c[0]; a[o + 7] = c[1]; a[o + 8] = c[2];
+    a[o + 9] = u; a[o + 10] = v; a[o + 11] = m;
+    return this.nv++;
+  }
+  tri(a, b, c) {
+    if (this.ni + 3 > this.maxI) return;
+    const i = this.idx, k = this.ni;
+    i[k] = a; i[k + 1] = b; i[k + 2] = c; this.ni += 3;
+  }
+  quad(a, b, c, d) { this.tri(a, b, c); this.tri(a, c, d); }
+  setNormal(i, n) { const o = i * FLOATS_PER_VERT + 3; this.v[o] = n[0]; this.v[o + 1] = n[1]; this.v[o + 2] = n[2]; }
+  pos(i) { const o = i * FLOATS_PER_VERT; return [this.v[o], this.v[o + 1], this.v[o + 2]]; }
+  // Transform vertices [start, nv) by matrix m (rigid).
+  xform(start, m) {
+    const a = this.v;
+    for (let i = start; i < this.nv; i++) {
+      const o = i * FLOATS_PER_VERT;
+      const p = M4.point(m, [a[o], a[o + 1], a[o + 2]]), n = M4.dir(m, [a[o + 3], a[o + 4], a[o + 5]]);
+      a[o] = p[0]; a[o + 1] = p[1]; a[o + 2] = p[2]; a[o + 3] = n[0]; a[o + 4] = n[1]; a[o + 5] = n[2];
+    }
+  }
+  // Recompute normals of a (rows x cols) grid of vertices starting at `base`; cols wrap if `wrap`.
+  gridNormals(base, rows, cols, wrap, outwardRef) {
+    const P = (r, c) => this.pos(base + r * cols + c);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const r0 = Math.max(r - 1, 0), r1 = Math.min(r + 1, rows - 1);
+      let c0 = c - 1, c1 = c + 1;
+      if (wrap) { c0 = (c0 + cols) % cols; c1 = c1 % cols; } else { c0 = Math.max(c0, 0); c1 = Math.min(c1, cols - 1); }
+      const du = V3.sub(P(r1, c), P(r0, c)), dv = V3.sub(P(r, c1), P(r, c0));
+      let n = V3.cross(du, dv);
+      if (V3.len(n) < 1e-9) n = [0, 1, 0];
+      n = V3.norm(n);
+      if (outwardRef) {
+        const ref = outwardRef(r, c);
+        if (V3.dot(n, V3.sub(P(r, c), ref)) < 0) n = V3.mul(n, -1);
+      }
+      this.setNormal(base + r * cols + c, n);
+    }
+  }
+}
+
+// Ellipsoid with orthogonal semi-axis vectors ax, ay, az.
+function addEllipsoid(mb, c, ax, ay, az, col, mat, seg = 10, rings = 7, uvFn) {
+  const base = mb.nv;
+  const la = V3.dot(ax, ax) || 1, lb = V3.dot(ay, ay) || 1, lc = V3.dot(az, az) || 1;
+  for (let r = 0; r <= rings; r++) {
+    const phi = -Math.PI / 2 + (Math.PI * r) / rings, cp = Math.cos(phi), sp = Math.sin(phi);
+    for (let s = 0; s <= seg; s++) {
+      const th = (TAU * s) / seg, ux = cp * Math.cos(th), uy = sp, uz = cp * Math.sin(th);
+      const p = [c[0] + ax[0] * ux + ay[0] * uy + az[0] * uz, c[1] + ax[1] * ux + ay[1] * uy + az[1] * uz, c[2] + ax[2] * ux + ay[2] * uy + az[2] * uz];
+      const n = V3.norm([ax[0] * ux / la + ay[0] * uy / lb + az[0] * uz / lc, ax[1] * ux / la + ay[1] * uy / lb + az[1] * uz / lc, ax[2] * ux / la + ay[2] * uy / lb + az[2] * uz / lc]);
+      const uv = uvFn ? uvFn(s / seg, r / rings) : [s / seg, r / rings];
+      mb.vert(p, n, col, uv[0], uv[1], mat);
+    }
+  }
+  for (let r = 0; r < rings; r++) for (let s = 0; s < seg; s++) {
+    const a = base + r * (seg + 1) + s, b = a + seg + 1;
+    mb.quad(a, b, b + 1, a + 1);
+  }
+}
+
+// Oriented box: center c, half-axis vectors ex, ey, ez (mutually orthogonal).
+function addBox(mb, c, ex, ey, ez, col, mat, uvScale = 1) {
+  const faces = [[ex, ey, ez], [V3.mul(ex, -1), ey, ez], [ey, ex, ez], [V3.mul(ey, -1), ex, ez], [ez, ex, ey], [V3.mul(ez, -1), ex, ey]];
+  for (const [n, t1, t2] of faces) {
+    const nn = V3.norm(n), fc = V3.add(c, n), base = mb.nv;
+    for (const [a, b] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      const q = V3.add(fc, V3.add(V3.mul(t1, a), V3.mul(t2, b)));
+      mb.vert(q, nn, col, (a * 0.5 + 0.5) * uvScale, (b * 0.5 + 0.5) * uvScale, mat);
+    }
+    mb.quad(base, base + 1, base + 2, base + 3);
+  }
+}
+// ============================================================================
+// Sea: height-field long-wave simulation, ∂²h/∂t² = ∇·(g·depth ∇h), in flux form.
+// Cell-centred water columns H, face-centred volume fluxes qx/qz on a staggered
+// grid. Every step moves volume between neighbours only, so the total is exact.
+// Glass walls are zero-flux faces (they reflect). Fixed 180 Hz substeps.
+// ============================================================================
+const SURF_MAX = RIM - 0.07, SURF_SOFT = SURF_MAX - 0.12;
+// Breaking: waves higher than BREAK_H above or below still water lose energy fast.
+const BREAK_H = 0.2, BREAK_RATE = 25;
+const _f32 = new Float32Array(1), _u32 = new Uint32Array(_f32.buffer);
+function toHalf(v) {
+  _f32[0] = v;
+  const x = _u32[0], sign = (x >>> 16) & 0x8000, e = ((x >>> 23) & 0xff) - 112;
+  if (e <= 0) return sign;
+  if (e >= 31) return sign | 0x7bff;
+  return sign | ((e << 10) + (((x & 0x7fffff) + 0x1000) >>> 13));
+}
+
+class Sea {
+  constructor() {
+    const N = NX * NZ;
+    this.gnd = new Float64Array(N);
+    this.H = new Float64Array(N);
+    this.s = new Float64Array(N);
+    this.e = new Float64Array(N);
+    this.u = new Float64Array(N);
+    this.v = new Float64Array(N);
+    this.qx = new Float64Array((NX + 1) * NZ);
+    this.qz = new Float64Array(NX * (NZ + 1));
+    this.press = new Float64Array(N);
+    this.pot = new Float64Array(N);
+    this.foam = new Float64Array(N);
+    this.scale = new Float64Array(N);
+    this.limited = new Int32Array(N);
+    this.level = 0; this.levelTarget = 0;
+    this.tiltX = 0; this.tiltZ = 0;
+    this.gamma = 0.12;            // linear damping (1/s), set from the slider
+    this.visc = 0.02;             // light viscosity (diffusion number per substep)
+    this.halfFloat = typeof Float16Array !== 'undefined';
+    this.packed = this.halfFloat ? new Float16Array(N * 4) : new Uint16Array(N * 4);
+    for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
+      this.gnd[i + j * NX] = groundAt(-HX + (i + 0.5) * DX, -HZ + (j + 0.5) * DX);
+    }
+    this.buildViscosityMasks();
+    this.reset(0);
+  }
+
+  reset(level) {
+    this.level = level; this.levelTarget = level;
+    for (let c = 0; c < this.H.length; c++) this.H[c] = Math.max(0, level - this.gnd[c]);
+    this.qx.fill(0); this.qz.fill(0); this.foam.fill(0); this.press.fill(0);
+    this.beginFrame();
+    this.refresh();
+  }
+
+  clearPressure() { this.press.fill(0); }
+
+  // Pressure head blob. With ring=true the profile has zero integral: the
+  // equilibrium surface is a hollow with a raised rim of equal volume.
+  addBlob(x, z, amp, sigma, ring = false) {
+    if (!amp) return;
+    const reach = (ring ? 2 * sigma : sigma) * 3;
+    const i0 = clamp(Math.floor((x - reach + HX) / DX), 0, NX - 1), i1 = clamp(Math.ceil((x + reach + HX) / DX), 0, NX - 1);
+    const j0 = clamp(Math.floor((z - reach + HZ) / DX), 0, NZ - 1), j1 = clamp(Math.ceil((z + reach + HZ) / DX), 0, NZ - 1);
+    const is2 = 1 / (sigma * sigma), is2r = is2 * 0.25, P = this.press;
+    for (let j = j0; j <= j1; j++) {
+      const dz = -HZ + (j + 0.5) * DX - z;
+      for (let i = i0; i <= i1; i++) {
+        const dx = -HX + (i + 0.5) * DX - x, r2 = dx * dx + dz * dz;
+        let v = Math.exp(-r2 * is2);
+        if (ring) v -= 0.25 * Math.exp(-r2 * is2r);
+        P[i + j * NX] += amp * v;
+      }
+    }
+  }
+
+  // Once per frame, after pressure and tilt are set: viscosity, then the head
+  // field e = surface + pressure head + tilt potential used by the substeps.
+  beginFrame() {
+    const { gnd, H, s, e, pot, press } = this;
+    const tx = clamp(this.tiltX, -0.07, 0.07), tz = clamp(this.tiltZ, -0.085, 0.085);
+    for (let j = 0, c = 0; j < NZ; j++) {
+      const zt = tz * (-HZ + (j + 0.5) * DX);
+      for (let i = 0; i < NX; i++, c++) {
+        const p = press[c] + tx * (-HX + (i + 0.5) * DX) + zt;
+        pot[c] = p;
+        const sv = gnd[c] + H[c];
+        s[c] = sv; e[c] = sv + p;
+      }
+    }
+  }
+
+  step(dt) {
+    const { gnd, H, s, e, qx, qz, pot, scale } = this;
+    const k = dt / DX, gdt = dt * GRAV / DX, fr = dt * FRICTION, capK = DX / (4 * dt);
+    const lvl = this.level, brk = dt * BREAK_RATE;
+    if (this.visc > 0) this.viscosity(this.visc);
+    const damp = Math.max(0, 1 - dt * this.gamma);
+    const W1 = NX + 1;
+
+    // Momentum: every cell updates the face to its right (x) and in front (z).
+    // Faces on the glass (x = ±HX, z = ±HZ) are never written and stay zero.
+    for (let j = 0, c = 0; j < NZ; j++) {
+      const lastRow = j === NZ - 1;
+      for (let i = 0; i < NX; i++, c++) {
+        const sc = s[c], gc = gnd[c], ec = e[c];
+        if (i < NX - 1) {
+          const R = c + 1, f = c + j + 1, gr = gnd[R];
+          const mid = 0.5 * (sc + s[R]);
+          let d = mid - (gc > gr ? gc : gr);
+          if (d <= 1e-4) qx[f] = 0;
+          else {
+            if (d > DMAX) d = DMAX;
+            let q = (qx[f] - gdt * d * (e[R] - ec)) * damp;
+            const ex = mid - lvl;
+            if (ex > BREAK_H || ex < -BREAK_H) q *= Math.max(0, 1 - brk * ((ex < 0 ? -ex : ex) - BREAK_H));
+            if (d < 0.35) q /= 1 + fr * (q < 0 ? -q : q) / (d * d);
+            const qm = d * VMAX;
+            q = q > qm ? qm : q < -qm ? -qm : q;
+            // Soft ceiling below the glass rim: a brim-full cell takes no more inflow (volume is kept).
+            const sd = q > 0 ? s[R] : sc;
+            if (sd > SURF_SOFT) { const cap = sd >= SURF_MAX ? 0 : (SURF_MAX - sd) * capK; q = q > cap ? cap : q < -cap ? -cap : q; }
+            qx[f] = q;
+          }
+        }
+        if (!lastRow) {
+          const F = c + NX, gf = gnd[F];
+          const mid = 0.5 * (sc + s[F]);
+          let d = mid - (gc > gf ? gc : gf);
+          if (d <= 1e-4) qz[F] = 0;
+          else {
+            if (d > DMAX) d = DMAX;
+            let q = (qz[F] - gdt * d * (e[F] - ec)) * damp;
+            const ex = mid - lvl;
+            if (ex > BREAK_H || ex < -BREAK_H) q *= Math.max(0, 1 - brk * ((ex < 0 ? -ex : ex) - BREAK_H));
+            if (d < 0.35) q /= 1 + fr * (q < 0 ? -q : q) / (d * d);
+            const qm = d * VMAX;
+            q = q > qm ? qm : q < -qm ? -qm : q;
+            const sd = q > 0 ? s[F] : sc;
+            if (sd > SURF_SOFT) { const cap = sd >= SURF_MAX ? 0 : (SURF_MAX - sd) * capK; q = q > cap ? cap : q < -cap ? -cap : q; }
+            qz[F] = q;
+          }
+        }
+      }
+    }
+    // Outflow limiter: no cell may give away more water than it holds. Only
+    // cells about to run dry need it, so their outgoing faces are scaled in place.
+    const lim = this.limited;
+    let nl = 0;
+    for (let j = 0, c = 0; j < NZ; j++) {
+      for (let i = 0; i < NX; i++, c++) {
+        const fl = c + j, a = qx[fl + 1], b = qx[fl], cf = qz[c + NX], cb = qz[c];
+        let out = 0;
+        if (a > 0) out += a;
+        if (b < 0) out -= b;
+        if (cf > 0) out += cf;
+        if (cb < 0) out -= cb;
+        out *= k;
+        if (out > H[c]) { scale[nl] = H[c] / out; lim[nl++] = c; }
+      }
+    }
+    for (let n = 0; n < nl; n++) {
+      const c = lim[n], f = scale[n], fl = c + ((c / NX) | 0);   // fl = j*(NX+1) + i
+      if (qx[fl + 1] > 0) qx[fl + 1] *= f;
+      if (qx[fl] < 0) qx[fl] *= f;
+      if (qz[c + NX] > 0) qz[c + NX] *= f;
+      if (qz[c] < 0) qz[c] *= f;
+    }
+    // Continuity, and the surface/head fields for the next substep.
+    for (let j = 0, c = 0; j < NZ; j++) {
+      for (let i = 0; i < NX; i++, c++) {
+        const fl = c + j;
+        let h = H[c] + k * (qx[fl] - qx[fl + 1] + qz[c] - qz[c + NX]);
+        if (h < 0) h = 0;
+        H[c] = h;
+        const sv = gnd[c] + h;
+        s[c] = sv; e[c] = sv + pot[c];
+      }
+    }
+  }
+
+  // Light viscosity on the deep-water faces only. There q = depth·u with nearly
+  // uniform depth, so diffusing q is diffusing velocity; near the shore it would
+  // push flux into thin water and pump energy, so those faces are left out.
+  buildViscosityMasks() {
+    const g = this.gnd, W1 = NX + 1, deep = (c) => g[c] < -0.6;
+    const xs = [], zs = [];
+    for (let j = 1; j < NZ - 1; j++) for (let i = 2; i < NX - 1; i++) {
+      const L = j * NX + i - 1, R = L + 1;
+      if (deep(L) && deep(R) && deep(L - NX) && deep(R - NX) && deep(L + NX) && deep(R + NX) && deep(L - 1) && deep(R + 1)) xs.push(j * W1 + i);
+    }
+    for (let j = 2; j < NZ - 1; j++) for (let i = 1; i < NX - 1; i++) {
+      const B = (j - 1) * NX + i, F = B + NX;
+      if (deep(B) && deep(F) && deep(B - 1) && deep(B + 1) && deep(F - 1) && deep(F + 1) && deep(B - NX) && deep(F + NX)) zs.push(j * NX + i);
+    }
+    this.viscX = Int32Array.from(xs); this.viscZ = Int32Array.from(zs);
+  }
+  // Applied every substep before the momentum update (Jacobi), which keeps the
+  // combined scheme stable; applying it once per frame at triple strength is not.
+  viscosity(nu) {
+    const { qx, qz, viscX, viscZ } = this, W1 = NX + 1;
+    if (!this.tmpX) { this.tmpX = new Float64Array(qx.length); this.tmpZ = new Float64Array(qz.length); }
+    const tx = this.tmpX, tz = this.tmpZ;
+    tx.set(qx); tz.set(qz);
+    for (let n = 0; n < viscX.length; n++) { const f = viscX[n]; qx[f] = tx[f] + nu * (tx[f - 1] + tx[f + 1] + tx[f - W1] + tx[f + W1] - 4 * tx[f]); }
+    for (let n = 0; n < viscZ.length; n++) { const f = viscZ[n]; qz[f] = tz[f] + nu * (tz[f - 1] + tz[f + 1] + tz[f - NX] + tz[f + NX] - 4 * tz[f]); }
+  }
+
+  // Tide: ease the still-water level toward the slider; add/remove water uniformly from wet cells.
+  adjustLevel(dt) {
+    const d = clamp(this.levelTarget - this.level, -0.06 * dt, 0.06 * dt);
+    if (Math.abs(d) < 1e-7) return;
+    this.level += d;
+    const H = this.H;
+    for (let c = 0; c < H.length; c++) if (H[c] > 0.002) H[c] = Math.max(0, H[c] + d);
+  }
+
+  // Derived per-frame fields: surface, cell velocities, foam.
+  refresh(dt = 0) {
+    const { gnd, H, s, u, v, qx, qz, foam } = this, W1 = NX + 1;
+    for (let j = 0, c = 0; j < NZ; j++) {
+      for (let i = 0; i < NX; i++, c++) {
+        s[c] = gnd[c] + H[c];
+        const fl = j * W1 + i, hh = H[c] > 0.03 ? H[c] : 0.03;
+        u[c] = (0.5 * (qx[fl] + qx[fl + 1])) / hh;
+        v[c] = (0.5 * (qz[c] + qz[c + NX])) / hh;
+      }
+    }
+    if (!dt) return;
+    const decay = Math.exp(-dt / 1.7), lvl = this.level, inv2 = 1 / (DX * DX);
+    for (let j = 1; j < NZ - 1; j++) {
+      for (let i = 1; i < NX - 1; i++) {
+        const c = i + j * NX, h = H[c];
+        if (h < 0.004) { foam[c] *= 0.6; continue; }
+        const sc = s[c];
+        const sl = H[c - 1] > 0.004 ? s[c - 1] : sc, sr = H[c + 1] > 0.004 ? s[c + 1] : sc;
+        const sb = H[c - NX] > 0.004 ? s[c - NX] : sc, sf = H[c + NX] > 0.004 ? s[c + NX] : sc;
+        const crest = -(sl + sr + sb + sf - 4 * sc) * inv2;
+        const uu = u[c], vv = v[c], speed = Math.sqrt(uu * uu + vv * vv);
+        let add = 0;
+        if (crest > 5 && sc - lvl > 0.015) add += (crest - 5) * 0.03;
+        if (h < 0.15 && speed > 0.18) add += (speed - 0.18) * 2.2 * (1 - h / 0.15);
+        if (speed > 0.85) add += (speed - 0.85) * 0.8;
+        const f = foam[c] * decay + add * dt * 6;
+        foam[c] = f > 1 ? 1 : f;
+      }
+    }
+  }
+
+  // Bilinear sample of a cell-centred field.
+  bil(arr, x, z) {
+    let fx = (x + HX) / DX - 0.5, fz = (z + HZ) / DX - 0.5;
+    fx = clamp(fx, 0, NX - 1.001); fz = clamp(fz, 0, NZ - 1.001);
+    const i = fx | 0, j = fz | 0, tx = fx - i, tz = fz - j, c = i + j * NX;
+    return lerp(lerp(arr[c], arr[c + 1], tx), lerp(arr[c + NX], arr[c + NX + 1], tx), tz);
+  }
+  surfaceAt(x, z) { return this.bil(this.s, x, z); }
+  groundAtF(x, z) { return this.bil(this.gnd, x, z); }
+  depthAt(x, z) { return this.bil(this.H, x, z); }
+  velAt(x, z) { return [this.bil(this.u, x, z), this.bil(this.v, x, z)]; }
+  // Largest surface excursion from still water inside a radius (cheap, strided).
+  maxEtaNear(x, z, r) {
+    let m = 0;
+    const i0 = clamp(Math.floor((x - r + HX) / DX), 0, NX - 1), i1 = clamp(Math.ceil((x + r + HX) / DX), 0, NX - 1);
+    const j0 = clamp(Math.floor((z - r + HZ) / DX), 0, NZ - 1), j1 = clamp(Math.ceil((z + r + HZ) / DX), 0, NZ - 1);
+    for (let j = j0; j <= j1; j += 2) for (let i = i0; i <= i1; i += 2) {
+      const c = i + j * NX;
+      if (this.H[c] > 0.01) m = Math.max(m, Math.abs(this.s[c] - this.level));
+    }
+    return m;
+  }
+
+  stats() {
+    const { H, s } = this;
+    let n = 0, sum = 0, sum2 = 0, vol = 0, maxE = 0, finite = true;
+    for (let c = 0; c < H.length; c++) {
+      const h = H[c];
+      vol += h;
+      if (!(h >= 0) || h > 50) finite = false;
+      if (h > 0.05) {
+        // relative to the level the (possibly tilted) sea is settling toward
+        const e = s[c] + this.pot[c] - this.press[c] - this.level;
+        sum += e; sum2 += e * e; n++;
+        const ae = e < 0 ? -e : e;
+        if (ae > maxE) maxE = ae;
+      }
+    }
+    const mean = n ? sum / n : 0, sd = n ? Math.sqrt(Math.max(0, sum2 / n - mean * mean)) : 0;
+    return { swell: 4 * sd, volume: vol * DX * DX, maxEta: maxE, finite };
+  }
+
+  // rgba = surface y, ground y (static, written once), foam, water column — half floats for the GPU.
+  pack() {
+    const { s, gnd, foam, H, packed } = this;
+    if (!this.groundPacked) {
+      for (let c = 0; c < H.length; c++) packed[c * 4 + 1] = this.halfFloat ? gnd[c] : toHalf(gnd[c]);
+      this.groundPacked = true;
+    }
+    if (this.halfFloat) {
+      for (let c = 0, o = 0; c < H.length; c++, o += 4) { packed[o] = s[c]; packed[o + 2] = foam[c]; packed[o + 3] = H[c]; }
+    } else {
+      for (let c = 0, o = 0; c < H.length; c++, o += 4) {
+        packed[o] = toHalf(s[c]);
+        const f = foam[c];
+        packed[o + 2] = f > 1e-4 ? toHalf(f) : 0;
+        packed[o + 3] = toHalf(H[c]);
+      }
+    }
+    return packed;
+  }
+}
+// ============================================================================
+// WGSL. One shared prelude (frame uniforms, noise, sky, lighting helpers) and
+// one module per pass: shadow, opaque (HDR + distance, 4x MSAA), caustics
+// (compute), water, glass, particles, tone mapping.
+// ============================================================================
+const WGSL_PRELUDE = /* wgsl */`
+struct Frame {
+  viewProj: mat4x4f,
+  invViewProj: mat4x4f,
+  lightViewProj: mat4x4f,
+  block: mat4x4f,
+  invBlock: mat4x4f,
+  camPos: vec4f,     // xyz, time (frozen while paused)
+  sunDir: vec4f,     // toward the key light, intensity
+  sunColor: vec4f,   // rgb, shadow strength
+  skyCol: vec4f,     // ambient sky rgb, ambient intensity
+  gndCol: vec4f,     // ambient ground rgb, exposure
+  backTop: vec4f,    // backdrop top rgb, mode (0 day, 1 snow, 2 aurora)
+  backBot: vec4f,    // backdrop bottom rgb, night-sky amount
+  lp0: vec4f, lc0: vec4f,   // igloo light: position + intensity, colour + emission
+  lp1: vec4f, lc1: vec4f,   // lantern light
+  water: vec4f,      // still level, caustic strength, ripple amount, refraction strength
+  res: vec4f,        // width, height, 1/width, 1/height
+  snow: vec4f,       // wind offset x, wind offset z, fall offset, flake count
+  misc: vec4f,       // snow amount, blizzard, star amount, wind speed
+  fog: vec4f,        // underwater scatter rgb, absorption scale
+  camRight: vec4f,
+  camUp: vec4f,
+  extra: vec4f,      // overcast amount, glass alpha, unused, unused
+};
+@group(0) @binding(0) var<uniform> F: Frame;
+
+const HX = ${HX.toFixed(4)};
+const HZ = ${HZ.toFixed(4)};
+const TW = ${TW.toFixed(4)};
+const TD = ${TD.toFixed(4)};
+const BLOCK_BOTTOM = ${BLOCK_BOTTOM.toFixed(4)};
+const RIM = ${RIM.toFixed(4)};
+const PI = 3.14159265;
+
+fn tankUV(p: vec2f) -> vec2f { return vec2f((p.x + HX) / TW, (p.y + HZ) / TD); }
+fn hash12(p: vec2f) -> f32 {
+  var p3 = fract(vec3f(p.x, p.y, p.x) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+fn hash13(p: vec3f) -> f32 {
+  var p3 = fract(p * 0.1031);
+  p3 += dot(p3, p3.zyx + 31.32);
+  return fract((p3.x + p3.y) * p3.z);
+}
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2f(1.0, 0.0)), u.x), mix(hash12(i + vec2f(0.0, 1.0)), hash12(i + vec2f(1.0, 1.0)), u.x), u.y);
+}
+fn fbm2(p: vec2f) -> f32 {
+  var a = 0.5; var s = 0.0; var q = p;
+  for (var k = 0; k < 4; k++) { s += a * vnoise(q); q = q * 2.03 + vec2f(1.7, 9.2); a *= 0.5; }
+  return s;
+}
+fn worley(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p);
+  var md = 8.0;
+  for (var y = -1; y <= 1; y++) {
+    for (var x = -1; x <= 1; x++) {
+      let g = vec2f(f32(x), f32(y));
+      let o = vec2f(hash12(i + g), hash12(i + g + 17.31));
+      md = min(md, length(g + o - f));
+    }
+  }
+  return md;
+}
+
+// Small ambient wind ripples (analytic), shared by caustics and the water shader.
+fn rippleGrad(p: vec2f, t: f32) -> vec3f {
+  // returns (height, d/dx, d/dz)
+  var h = 0.0; var g = vec2f(0.0);
+  let amp = F.water.z;
+  var dirs = array<vec2f, 4>(vec2f(0.94, 0.34), vec2f(-0.42, 0.91), vec2f(0.63, -0.78), vec2f(-0.86, -0.51));
+  var ks = vec4f(13.0, 17.5, 21.0, 27.0);
+  var ws = vec4f(2.3, 2.9, 3.4, 4.1);
+  for (var i = 0; i < 4; i++) {
+    let k = ks[i]; let ph = dot(dirs[i], p) * k + t * ws[i] + f32(i) * 1.7;
+    let a = amp / (1.0 + f32(i) * 0.6);
+    h += a * sin(ph);
+    g += a * k * cos(ph) * dirs[i];
+  }
+  return vec3f(h, g);
+}
+
+fn aurora(d: vec3f) -> vec3f {
+  if (d.y < 0.0) { return vec3f(0.0); }
+  let t = F.camPos.w;
+  let az = atan2(d.x, -d.z);
+  let h = d.y;
+  var col = vec3f(0.0);
+  for (var k = 0; k < 3; k++) {
+    let fk = f32(k);
+    let x = az * (2.2 + fk * 0.7) + fk * 1.9 + sin(az * 1.6 + t * 0.07 + fk) * 0.9;
+    let rays = pow(0.5 + 0.5 * sin(x * 7.0 + sin(x * 1.7 + t * 0.21 + fk) * 2.4), 2.5);
+    let base = 0.16 + 0.07 * sin(az * 1.3 + fk * 2.0 + t * 0.05) + fk * 0.05;
+    let curtain = smoothstep(base - 0.02, base + 0.03, h) * exp(-max(h - base, 0.0) * (6.0 - fk));
+    let green = vec3f(0.12, 0.95, 0.48);
+    let violet = vec3f(0.55, 0.22, 0.85);
+    let c = mix(green, violet, smoothstep(0.0, 0.32, h - base));
+    col += c * rays * curtain * (0.55 - fk * 0.12);
+  }
+  return col * 0.68;
+}
+fn stars(d: vec3f) -> vec3f {
+  if (d.y < 0.02) { return vec3f(0.0); }
+  let t = F.camPos.w;
+  let az = atan2(d.x, -d.z);
+  let g = vec2f(az * 90.0, asin(clamp(d.y, -1.0, 1.0)) * 90.0);
+  let cell = floor(g);
+  let r = hash12(cell);
+  if (r < 0.965) { return vec3f(0.0); }
+  let ctr = cell + vec2f(hash12(cell + 3.1), hash12(cell + 7.7));
+  let dd = length(g - ctr);
+  let tw = 0.6 + 0.4 * sin(t * (1.5 + r * 5.0) + r * 40.0);
+  let s = smoothstep(0.35, 0.0, dd) * tw * (r - 0.965) * 28.0;
+  return vec3f(0.85, 0.9, 1.0) * s * smoothstep(0.02, 0.2, d.y);
+}
+
+// Environment seen in reflections: studio sky + a soft key box, night sky in aurora mode.
+fn skyEnv(d: vec3f) -> vec3f {
+  let up = d.y;
+  var c = mix(F.backBot.rgb * 0.85, F.skyCol.rgb * 1.2, smoothstep(-0.1, 0.75, up));
+  let sb = pow(max(dot(d, F.sunDir.xyz), 0.0), 24.0) * F.sunDir.w * 0.22;
+  c += F.sunColor.rgb * sb;
+  c += F.backBot.w * (aurora(d) + stars(d));
+  return c;
+}
+
+fn viewRay(uv: vec2f) -> vec3f {
+  let ndc = vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+  let a = F.invViewProj * vec4f(ndc, 0.0, 1.0);
+  let b = F.invViewProj * vec4f(ndc, 1.0, 1.0);
+  return normalize(b.xyz / b.w - a.xyz / a.w);
+}
+// Calm editorial backdrop: a paper sweep; at night a deep sky with aurora and stars.
+fn backdrop(uv: vec2f, dir: vec3f) -> vec3f {
+  var c = mix(F.backTop.rgb, F.backBot.rgb, smoothstep(0.0, 1.0, uv.y));
+  let aspect = F.res.x * F.res.w;
+  let r = length((uv - vec2f(0.46, 0.44)) * vec2f(aspect, 1.0));
+  c *= 1.0 + 0.09 * exp(-r * r * 2.2) - 0.10 * smoothstep(0.45, 1.35, r);
+  // The night sky on the backdrop uses its own direction (turning with the
+  // camera) so the curtains hang in the upper backdrop whatever the pitch.
+  let night = F.backBot.w;
+  if (night > 0.001) {
+    let az = (uv.x - 0.5) * 1.7 * aspect / 1.6 + F.extra.z;
+    let h = (0.6 - uv.y) * 0.78;
+    let pd = vec3f(sin(az) * cos(h), sin(h), -cos(az) * cos(h));
+    c += night * (aurora(pd) + stars(pd)) * 0.9;
+  }
+  return c;
+}
+
+fn schlick(f0: f32, c: f32) -> f32 { return f0 + (1.0 - f0) * pow(1.0 - clamp(c, 0.0, 1.0), 5.0); }
+fn waterSigma() -> vec3f { return vec3f(0.55, 0.31, 0.17) * F.fog.w; }
+`;
+
+const WGSL_SHADOW = WGSL_PRELUDE + /* wgsl */`
+struct Model { model: mat4x4f, info: vec4f };
+@group(1) @binding(0) var<uniform> M: Model;
+@vertex fn vsShadow(@location(0) pos: vec3f) -> @builtin(position) vec4f {
+  return F.lightViewProj * (M.model * vec4f(pos, 1.0));
+}
+`;
+
+// Opaque pass. Group 0 adds the water state, caustics and the shadow map.
+const WGSL_OPAQUE = WGSL_PRELUDE + /* wgsl */`
+@group(0) @binding(1) var stateTex: texture_2d<f32>;
+@group(0) @binding(2) var causticTex: texture_2d<f32>;
+@group(0) @binding(3) var shadowMap: texture_depth_2d;
+@group(0) @binding(4) var samp: sampler;
+@group(0) @binding(5) var cmpSamp: sampler_comparison;
+struct Model { model: mat4x4f, info: vec4f };
+@group(1) @binding(0) var<uniform> M: Model;
+
+var<private> POISSON: array<vec2f, 12> = array<vec2f, 12>(
+  vec2f(-0.326, -0.406), vec2f(-0.840, -0.074), vec2f(-0.696, 0.457), vec2f(-0.203, 0.621),
+  vec2f(0.962, -0.195), vec2f(0.473, -0.480), vec2f(0.519, 0.767), vec2f(0.185, -0.893),
+  vec2f(0.507, 0.064), vec2f(0.896, 0.412), vec2f(-0.322, -0.933), vec2f(-0.792, -0.598));
+
+fn shadowAt(wpos: vec3f, n: vec3f, radius: f32) -> f32 {
+  let lp = F.lightViewProj * vec4f(wpos + n * 0.025, 1.0);
+  let ndc = lp.xyz / lp.w;
+  let uv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) { return 1.0; }
+  let texel = 1.0 / 2048.0;
+  let rot = hash12(wpos.xz * 97.0 + wpos.y * 13.0) * 6.2831;
+  let cr = cos(rot); let sr = sin(rot);
+  var s = 0.0;
+  for (var k = 0; k < 12; k++) {
+    let o = POISSON[k];
+    let ro = vec2f(o.x * cr - o.y * sr, o.x * sr + o.y * cr);
+    s += textureSampleCompareLevel(shadowMap, cmpSamp, uv + ro * radius * texel, ndc.z - 0.0012);
+  }
+  return s / 12.0;
+}
+fn hemi(n: vec3f) -> vec3f {
+  return mix(F.gndCol.rgb, F.skyCol.rgb, n.y * 0.5 + 0.5) * F.skyCol.w;
+}
+fn pointLight(lp: vec4f, lc: vec4f, p: vec3f, n: vec3f) -> vec3f {
+  if (lp.w <= 0.0) { return vec3f(0.0); }
+  let d = lp.xyz - p;
+  let d2 = dot(d, d);
+  let l = d * inverseSqrt(max(d2, 1e-4));
+  let att = lp.w / (1.0 + d2 * 3.0) * smoothstep(9.0, 1.0, d2);
+  return lc.rgb * att * (max(dot(n, l), 0.0) * 0.85 + 0.15);
+}
+
+struct VIn {
+  @location(0) pos: vec3f, @location(1) nrm: vec3f, @location(2) col: vec3f,
+  @location(3) uv: vec2f, @location(4) mat: f32,
+};
+struct VOut {
+  @builtin(position) pos: vec4f,
+  @location(0) wpos: vec3f,
+  @location(1) nrm: vec3f,
+  @location(2) col: vec3f,
+  @location(3) uv: vec2f,
+  @location(4) @interpolate(flat) mat: u32,
+  @location(5) tpos: vec3f,
+};
+@vertex fn vsLit(v: VIn) -> VOut {
+  var o: VOut;
+  let w = M.model * vec4f(v.pos, 1.0);
+  o.pos = F.viewProj * w;
+  o.wpos = w.xyz;
+  o.nrm = (M.model * vec4f(v.nrm, 0.0)).xyz;
+  o.col = v.col;
+  o.uv = v.uv;
+  o.mat = u32(v.mat + 0.5);
+  o.tpos = select((F.invBlock * w).xyz, v.pos, M.info.x > 0.5);
+  return o;
+}
+
+struct FOut { @location(0) color: vec4f, @location(1) aux: vec4f };
+
+fn terrainAlbedo(tp: vec3f, n: vec3f) -> vec3f {
+  let lvl = F.water.x;
+  let slope = 1.0 - clamp(n.y, 0.0, 1.0);
+  let nz = fbm2(tp.xz * 3.1);
+  // rotated, low-contrast fine noise (axis-aligned value noise shows its grid)
+  let rq = vec2f(tp.x * 0.8 - tp.z * 0.6, tp.x * 0.6 + tp.z * 0.8);
+  let nz2 = fbm2(rq * 9.0 + vec2f(7.0, 2.0));
+  let rock = mix(vec3f(0.31, 0.31, 0.32), vec3f(0.42, 0.41, 0.40), nz);
+  let snow = vec3f(0.84, 0.865, 0.9) * (0.95 + 0.05 * nz2);
+  let wet = vec3f(0.16, 0.165, 0.17) * (0.85 + 0.3 * nz);
+  let sandShallow = mix(vec3f(0.50, 0.48, 0.43), vec3f(0.58, 0.56, 0.50), nz2);
+  let sandDeep = mix(vec3f(0.33, 0.34, 0.34), vec3f(0.40, 0.40, 0.38), nz);
+  let snowLine = lvl + 0.07 + 0.05 * nz;
+  var a: vec3f;
+  if (tp.y > snowLine) {
+    // wind-packed snow: faint drifts and blue-grey hollows
+    let drift = fbm2(tp.xz * 5.0 + vec2f(3.0, 1.0));
+    a = mix(snow * (0.9 + 0.1 * drift), rock, smoothstep(0.6, 0.85, slope + nz * 0.12) * 0.85);
+  } else if (tp.y > lvl - 0.03) {
+    a = mix(wet, mix(snow, rock, 0.5), smoothstep(lvl + 0.02, snowLine, tp.y));
+  } else {
+    let depth = lvl - tp.y;
+    a = mix(sandShallow, sandDeep, smoothstep(0.1, 1.2, depth));
+    // pebbles and dark weed patches on the floor
+    a *= 0.9 + 0.14 * nz2;
+    a = mix(a, vec3f(0.17, 0.2, 0.18), smoothstep(0.62, 0.75, fbm2(tp.xz * 1.3 + 4.0)) * 0.55 * smoothstep(0.3, 0.8, depth));
+  }
+  return a;
+}
+
+@fragment fn fsLit(v: VOut) -> FOut {
+  var n = normalize(v.nrm);
+  let V = normalize(F.camPos.xyz - v.wpos);
+  var albedo = v.col;
+  var gloss = 0.0;
+  var spec = 0.04;
+  var emissive = vec3f(0.0);
+  var wrap = 0.0;
+  var sss = vec3f(0.0);
+  let tp = v.tpos;
+  switch (v.mat) {
+    case 1u: { // harbour seal: spots on the back and flanks
+      let s = v.uv.x; let th = (v.uv.y - 0.5) * 6.2831;
+      let dorsal = 0.5 + 0.5 * cos(th);
+      let w = worley(vec2f(s * 15.0, th * 1.75));
+      let w2 = worley(vec2f(s * 31.0 + 3.0, th * 3.6 + 1.0));
+      let spot = (1.0 - smoothstep(0.16, 0.26, w)) * 0.55 + (1.0 - smoothstep(0.10, 0.18, w2)) * 0.35;
+      albedo *= 1.0 - spot * smoothstep(0.08, 0.14, s) * (0.35 + 0.65 * dorsal);
+      gloss = 26.0; spec = 0.05;
+    }
+    case 2u: { // humpback: dark back, pale throat pleats and belly, mouth line
+      let s = v.uv.x; let th = (v.uv.y - 0.5) * 6.2831;
+      let ventral = -cos(th);
+      let paleReach = mix(0.15, 0.55, smoothstep(0.62, 0.3, s));
+      var pale = smoothstep(paleReach, paleReach + 0.25, ventral);
+      let mott = vnoise(vec2f(s * 40.0, th * 6.0));
+      var c = mix(vec3f(0.075, 0.08, 0.095) * (0.9 + 0.2 * mott), vec3f(0.84, 0.85, 0.85) * (0.92 + 0.08 * mott), pale);
+      let pleatZone = smoothstep(0.04, 0.09, s) * smoothstep(0.54, 0.42, s) * smoothstep(0.35, 0.6, ventral);
+      let groove = smoothstep(0.82, 1.0, 0.5 + 0.5 * cos(th * 34.0));
+      c *= 1.0 - groove * pleatZone * 0.55;
+      let mouthTh = 1.55 + 0.9 * smoothstep(0.0, 0.2, s);
+      let mouth = (1.0 - smoothstep(0.0, 0.05, abs(abs(th) - mouthTh))) * smoothstep(0.215, 0.18, s) * smoothstep(0.0, 0.015, s);
+      c = mix(c, vec3f(0.03, 0.03, 0.035), mouth * 0.9);
+      albedo = c; gloss = 40.0; spec = 0.05;
+    }
+    case 3u: { // snow
+      albedo *= 0.94;
+      let g = hash13(floor(v.wpos * 140.0));
+      gloss = 8.0; spec = 0.02;
+      if (g > 0.985) { emissive += vec3f(1.0) * F.sunDir.w * 0.25 * pow(max(dot(n, normalize(F.sunDir.xyz + V)), 0.0), 8.0); }
+      wrap = 0.25;
+    }
+    case 4u: { // wood planks
+      let grain = vnoise(vec2f(v.uv.x * 3.0, v.uv.y * 40.0));
+      albedo *= 0.8 + 0.35 * grain;
+      gloss = 10.0;
+    }
+    case 5u: { // jelly: gummy, wrapped light, soft inner glow, wet highlight
+      wrap = 0.6; gloss = 90.0; spec = 0.06;
+      sss = albedo * vec3f(0.55, 0.65, 0.7);
+    }
+    case 6u: { // igloo snow blocks
+      let rows = 6.0;
+      let row = floor(v.uv.y * rows);
+      let u = v.uv.x * (13.0 - row) + row * 0.5;
+      let gu = abs(fract(u) - 0.5); let gv = abs(fract(v.uv.y * rows) - 0.5);
+      let groove = max(smoothstep(0.44, 0.5, gu), smoothstep(0.42, 0.5, gv));
+      albedo *= 1.0 - groove * 0.28;
+      wrap = 0.25; gloss = 8.0;
+    }
+    case 7u: { // warm emitters (lantern glass, igloo doorway)
+      emissive = albedo * F.lc0.w;
+      albedo *= 0.25;
+    }
+    case 8u: { albedo = terrainAlbedo(tp, n); gloss = 6.0; }
+    case 9u: { // strata seen through the glass: sand, shingle and dark silt bands
+      let w = tp.x + tp.z;
+      let y = tp.y + 0.025 * fbm2(vec2f(w * 1.3, tp.y * 2.0)) + 0.012 * sin(w * 2.1);
+      let band = fract(y * 5.0);
+      var a = mix(vec3f(0.36, 0.33, 0.29), vec3f(0.46, 0.42, 0.36), smoothstep(0.15, 0.45, band));
+      a = mix(a, vec3f(0.24, 0.23, 0.22), smoothstep(0.7, 0.9, band));
+      albedo = a * (0.94 + 0.08 * vnoise(vec2f(w * 2.5, tp.y * 14.0)));
+    }
+    case 10u: { gloss = 60.0; spec = 0.06; }
+    case 11u: { gloss = 120.0; spec = 0.2; }
+    case 12u: { wrap = 0.3; gloss = 30.0; sss = vec3f(0.1, 0.16, 0.2); }
+    default: { gloss = 12.0; }
+  }
+
+  // Water above this point?
+  let inTank = abs(tp.x) < HX && abs(tp.z) < HZ && tp.y > BLOCK_BOTTOM;
+  var dBelow = 0.0;
+  if (inTank) {
+    let st = textureSampleLevel(stateTex, samp, tankUV(tp.xz), 0.0);
+    if (st.w > 0.004) { dBelow = max(st.x - tp.y, 0.0); }
+  }
+  let L = normalize(F.sunDir.xyz);
+  let NdL = dot(n, L);
+  let diff = max((NdL + wrap) / (1.0 + wrap), 0.0);
+  let radius = select(1.6, 2.6, v.mat == 5u);
+  let sh = mix(1.0, shadowAt(v.wpos, n, radius), F.sunColor.w);
+  var sunLight = F.sunColor.rgb * F.sunDir.w * diff * sh;
+  var amb = hemi(n);
+  if (dBelow > 0.0) {
+    let sigma = waterSigma();
+    let tDown = exp(-sigma * dBelow * 1.25);
+    let Lt = (F.invBlock * vec4f(L, 0.0)).xyz;
+    let cuv = tankUV(tp.xz + Lt.xz / max(Lt.y, 0.25) * dBelow);
+    let caus = textureSampleLevel(causticTex, samp, cuv, 0.0).rgb;
+    let cs = F.water.y;
+    sunLight *= tDown * mix(vec3f(1.0), caus, cs);
+    amb *= exp(-sigma * dBelow * 0.8) * vec3f(0.75, 0.9, 1.05);
+  }
+  var pts = pointLight(F.lp0, F.lc0, v.wpos, n) + pointLight(F.lp1, F.lc1, v.wpos, n);
+  if (dBelow > 0.0) { pts *= exp(-waterSigma() * dBelow * 1.5); }
+  var col = albedo * (sunLight + amb + pts) + sss * (F.skyCol.w * 0.6 + F.sunDir.w * 0.15);
+  if (gloss > 0.0) {
+    let H = normalize(L + V);
+    let fr = schlick(spec, dot(H, V));
+    let sp = (gloss + 8.0) / 25.0 * pow(max(dot(n, H), 0.0), gloss) * fr;
+    col += F.sunColor.rgb * F.sunDir.w * sp * sh * max(NdL, 0.0) * select(1.0, 0.25, dBelow > 0.0);
+    if (v.mat == 5u) { col += skyEnv(reflect(-V, n)) * schlick(0.04, dot(n, V)) * 0.8; }
+  }
+  col += emissive;
+  var o: FOut;
+  o.color = vec4f(col, 1.0);
+  o.aux = vec4f(distance(F.camPos.xyz, v.wpos), tp.y, dBelow, 1.0);
+  return o;
+}
+fn wrapPi(a: f32) -> f32 { return a - 6.2831853 * floor((a + 3.14159265) / 6.2831853); }
+
+// Backdrop (full-screen) and the unseen floor that only carries the shadow.
+struct BOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex fn vsBackdrop(@builtin(vertex_index) vi: u32) -> BOut {
+  let p = vec2f(f32((vi << 1u) & 2u), f32(vi & 2u));
+  var o: BOut;
+  o.pos = vec4f(p * 2.0 - 1.0, 1.0, 1.0);
+  o.uv = vec2f(p.x, 1.0 - p.y);
+  return o;
+}
+@fragment fn fsBackdrop(v: BOut) -> FOut {
+  let uv = v.pos.xy * F.res.zw;
+  var o: FOut;
+  o.color = vec4f(backdrop(uv, viewRay(uv)), 1.0);
+  o.aux = vec4f(60.0, 99.0, 0.0, 0.0);
+  return o;
+}
+struct FlOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f };
+@vertex fn vsFloor(@builtin(vertex_index) vi: u32) -> FlOut {
+  var c = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
+  let w = vec3f(c[vi].x * 26.0, ${FLOOR_Y.toFixed(4)}, c[vi].y * 26.0);
+  var o: FlOut;
+  o.pos = F.viewProj * vec4f(w, 1.0);
+  o.wpos = w;
+  return o;
+}
+@fragment fn fsFloor(v: FlOut) -> FOut {
+  let uv = v.pos.xy * F.res.zw;
+  let base = backdrop(uv, viewRay(uv));
+  let sh = shadowAt(v.wpos, vec3f(0.0, 1.0, 0.0), 5.5);
+  // soft contact shade under the jelly's rounded footprint
+  let q = abs(v.wpos.xz) - vec2f(${(JELLY_HX - 0.3).toFixed(3)}, ${(JELLY_HZ - 0.3).toFixed(3)});
+  let dd = length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - 0.3;
+  let ao = 1.0 - 0.42 * exp(-max(dd, 0.0) * 3.2);
+  let fade = 1.0 - smoothstep(7.0, 15.0, length(v.wpos.xz));
+  let k = mix(1.0, sh, F.sunColor.w * 0.62) * ao;
+  var o: FOut;
+  o.color = vec4f(base * mix(1.0, k, fade), 1.0);
+  o.aux = vec4f(distance(F.camPos.xyz, v.wpos), 99.0, 0.0, 1.0);
+  return o;
+}
+`;
+
+// Caustics: refract the live surface (plus ambient ripples) and measure how the
+// light footprint is squeezed on the floor: intensity = 1 / det(I - k·Hessian(h)).
+const CAUSTIC_W = 400, CAUSTIC_H = 280;
+const WGSL_CAUSTICS = WGSL_PRELUDE + /* wgsl */`
+@group(0) @binding(1) var stateTex: texture_2d<f32>;
+@group(0) @binding(2) var outTex: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var samp: sampler;
+fn live(p: vec2f) -> f32 { return textureSampleLevel(stateTex, samp, tankUV(p), 0.0).x; }
+// Second derivatives of the ambient ripples, analytically: (hxx, hzz, hxz).
+fn rippleHess(p: vec2f, t: f32) -> vec3f {
+  var dirs = array<vec2f, 4>(vec2f(0.94, 0.34), vec2f(-0.42, 0.91), vec2f(0.63, -0.78), vec2f(-0.86, -0.51));
+  var ks = vec4f(13.0, 17.5, 21.0, 27.0);
+  var ws = vec4f(2.3, 2.9, 3.4, 4.1);
+  var h = vec3f(0.0);
+  for (var i = 0; i < 4; i++) {
+    let k = ks[i]; let d = dirs[i];
+    let a = F.water.z / (1.0 + f32(i) * 0.6);
+    let sn = sin(dot(d, p) * k + t * ws[i] + f32(i) * 1.7);
+    h += -a * k * k * sn * vec3f(d.x * d.x, d.y * d.y, d.x * d.y);
+  }
+  return h;
+}
+fn focus(k: f32, hxx: f32, hzz: f32, hxz: f32) -> f32 {
+  let a = 1.0 - k * hxx; let d = 1.0 - k * hzz; let b = -k * hxz;
+  return clamp(1.0 / max(abs(a * d - b * b), 0.2), 0.0, 4.0);
+}
+@compute @workgroup_size(8, 8) fn csCaustics(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= ${CAUSTIC_W}u || id.y >= ${CAUSTIC_H}u) { return; }
+  let p = vec2f(-HX + (f32(id.x) + 0.5) * TW / ${CAUSTIC_W}.0, -HZ + (f32(id.y) + 0.5) * TD / ${CAUSTIC_H}.0);
+  // The live field is bilinear per 5 cm cell, so differentiate it over more than a cell.
+  let e = 0.07;
+  let h0 = live(p);
+  let hxx0 = (live(p + vec2f(e, 0.0)) - 2.0 * h0 + live(p - vec2f(e, 0.0))) / (e * e);
+  let hzz0 = (live(p + vec2f(0.0, e)) - 2.0 * h0 + live(p - vec2f(0.0, e))) / (e * e);
+  let hxz0 = (live(p + vec2f(e, e)) - live(p + vec2f(e, -e)) - live(p + vec2f(-e, e)) + live(p - vec2f(e, e))) / (4.0 * e * e);
+  let rh = rippleHess(p, F.camPos.w);
+  let hxx = hxx0 + rh.x; let hzz = hzz0 + rh.y; let hxz = hxz0 + rh.z;
+  let st = textureSampleLevel(stateTex, samp, tankUV(p), 0.0);
+  let depth = clamp(st.w, 0.0, 2.2);
+  var I = vec3f(1.0);
+  if (depth > 0.003) {
+    let k = 0.25 * depth;
+    I = vec3f(focus(k * 0.965, hxx, hzz, hxz), focus(k, hxx, hzz, hxz), focus(k * 1.035, hxx, hzz, hxz));
+  }
+  textureStore(outTex, vec2i(id.xy), vec4f(I, 1.0));
+}
+`;
+
+// Water: surface (front faces) and the four side walls seen through the glass.
+const WGSL_WATER = WGSL_PRELUDE + /* wgsl */`
+@group(0) @binding(1) var stateTex: texture_2d<f32>;
+@group(0) @binding(2) var sceneColor: texture_2d<f32>;
+@group(0) @binding(3) var sceneAux: texture_2d<f32>;
+@group(0) @binding(4) var samp: sampler;
+const NX = ${NX}; const NZ = ${NZ}; const DX = ${DX.toFixed(4)};
+
+fn stAt(i: i32, j: i32) -> vec4f { return textureLoad(stateTex, vec2i(clamp(i, 0, NX - 1), clamp(j, 0, NZ - 1)), 0); }
+fn hWet(i: i32, j: i32, fb: f32) -> f32 { let s = stAt(i, j); return select(fb, s.x, s.w > 0.003); }
+fn stSample(p: vec2f) -> vec4f { return textureSampleLevel(stateTex, samp, tankUV(p), 0.0); }
+
+struct WOut {
+  @builtin(position) pos: vec4f,
+  @location(0) wpos: vec3f,
+  @location(1) tpos: vec3f,
+  @location(2) nrm: vec3f,
+  @location(3) foam: f32,
+  @location(4) depth: f32,
+};
+@vertex fn vsWater(@builtin(vertex_index) vi: u32) -> WOut {
+  let i = i32(vi % u32(NX)); let j = i32(vi / u32(NX));
+  let c = stAt(i, j);
+  var x = -HX + (f32(i) + 0.5) * DX; var z = -HZ + (f32(j) + 0.5) * DX;
+  if (i == 0) { x = -HX + 0.004; } if (i == NX - 1) { x = HX - 0.004; }
+  if (j == 0) { z = -HZ + 0.004; } if (j == NZ - 1) { z = HZ - 0.004; }
+  let wet = c.w > 0.003;
+  var y = select(c.y - 0.05, min(c.x, RIM - 0.015), wet);
+  let hl = hWet(i - 1, j, c.x); let hr = hWet(i + 1, j, c.x);
+  let hb = hWet(i, j - 1, c.x); let hf = hWet(i, j + 1, c.x);
+  let n = normalize(vec3f((hl - hr) / (2.0 * DX), 1.0, (hb - hf) / (2.0 * DX)));
+  let tp = vec3f(x, y, z);
+  let w = F.block * vec4f(tp, 1.0);
+  var o: WOut;
+  o.pos = F.viewProj * w;
+  o.wpos = w.xyz;
+  o.tpos = tp;
+  o.nrm = (F.block * vec4f(n, 0.0)).xyz;
+  o.foam = c.z;
+  o.depth = c.w;
+  return o;
+}
+
+fn toUV(w: vec3f) -> vec2f {
+  let c = F.viewProj * vec4f(w, 1.0);
+  return vec2f(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
+}
+// Distance along a tank-local ray until it leaves the glass box (walls or bottom).
+fn tankExit(p: vec3f, d: vec3f) -> f32 {
+  var t = 100.0;
+  if (abs(d.x) > 1e-4) { t = min(t, (sign(d.x) * HX - p.x) / d.x); }
+  if (abs(d.z) > 1e-4) { t = min(t, (sign(d.z) * HZ - p.z) / d.z); }
+  if (d.y < -1e-4) { t = min(t, (BLOCK_BOTTOM - p.y) / d.y); }
+  return max(t, 0.0);
+}
+fn lightGlints(p: vec3f, n: vec3f, V: vec3f) -> vec3f {
+  var acc = vec3f(0.0);
+  for (var k = 0; k < 2; k++) {
+    var lp = F.lp0; var lc = F.lc0;
+    if (k == 1) { lp = F.lp1; lc = F.lc1; }
+    if (lp.w <= 0.0) { continue; }
+    let d = lp.xyz - p; let d2 = dot(d, d);
+    let L = d * inverseSqrt(d2);
+    let H = normalize(L + V);
+    let nh = max(dot(n, H), 0.0);
+    acc += lc.rgb * lp.w * (pow(nh, 260.0) * 2.2 + pow(nh, 24.0) * 0.06) / (1.0 + d2 * 0.35);
+  }
+  return acc;
+}
+fn foamTex(p: vec2f) -> f32 {
+  let t = F.camPos.w;
+  return smoothstep(0.35, 0.75, fbm2(p * 7.0 + vec2f(t * 0.07, -t * 0.05)) * 0.6 + vnoise(p * 23.0) * 0.4);
+}
+
+@fragment fn fsWater(v: WOut) -> @location(0) vec4f {
+  if (v.depth < 0.002) { discard; }
+  let pix = vec2i(v.pos.xy);
+  let uv = v.pos.xy * F.res.zw;
+  let toCam = F.camPos.xyz - v.wpos;
+  let distW = length(toCam);
+  let V = toCam / distW;
+  let dOpaque = textureLoad(sceneAux, pix, 0).x;
+  if (dOpaque < distW - 0.004) { discard; }
+  let rg = rippleGrad(v.tpos.xz, F.camPos.w);
+  let nt = normalize(vec3f(0.0, 1.0, 0.0) + (F.invBlock * vec4f(normalize(v.nrm), 0.0)).xyz - vec3f(rg.y, 0.0, rg.z));
+  let N = normalize((F.block * vec4f(nt, 0.0)).xyz);
+  let cosV = max(dot(N, V), 0.0);
+
+  // Screen-space refraction with a validity check against the distance buffer.
+  let Rt = refract(-V, N, 1.0 / 1.333);
+  let est = clamp(dOpaque - distW, 0.0, 1.6);
+  var uvR = uv + (toUV(v.wpos + Rt * est) - toUV(v.wpos - V * est)) * F.water.w;
+  uvR = clamp(uvR, vec2f(0.001), vec2f(0.999));
+  var dR = textureSampleLevel(sceneAux, samp, uvR, 0.0).x;
+  if (dR < distW + 0.01) { uvR = uv; dR = dOpaque; }
+  let behind = textureSampleLevel(sceneColor, samp, uvR, 0.0).rgb;
+  let rtT = normalize((F.invBlock * vec4f(Rt, 0.0)).xyz);
+  let path = min(max(dR - distW, 0.0), tankExit(v.tpos, rtT));
+  let sigma = waterSigma();
+  let T = exp(-sigma * path);
+  let scatter = F.fog.rgb * (F.skyCol.w * 0.9 + F.sunDir.w * 0.12);
+  var refr = behind * T + scatter * (1.0 - T);
+
+  let R = reflect(-V, N);
+  let Fr = schlick(0.02, cosV);
+  var col = mix(refr, skyEnv(R), Fr);
+  // restrained key highlight
+  let L = normalize(F.sunDir.xyz);
+  let H = normalize(L + V);
+  let nh = max(dot(N, H), 0.0);
+  col += F.sunColor.rgb * F.sunDir.w * (pow(nh, 900.0) * 1.6 + pow(nh, 70.0) * 0.035) * schlick(0.02, dot(H, V)) * 4.0;
+  col += lightGlints(v.wpos, N, V);
+  // foam on crests and shallows
+  let fm = clamp(v.foam * 1.6, 0.0, 1.0) * foamTex(v.tpos.xz);
+  let shore = smoothstep(0.05, 0.0, v.depth) * 0.35 * foamTex(v.tpos.xz * 1.7);
+  let foamAmt = clamp(fm + shore, 0.0, 0.92);
+  let foamLight = F.sunColor.rgb * F.sunDir.w * max(dot(N, L), 0.0) * 0.6 + F.skyCol.rgb * F.skyCol.w * 1.1 + (F.lc0.rgb * F.lp0.w + F.lc1.rgb * F.lp1.w) * 0.02;
+  col = mix(col, vec3f(0.93, 0.95, 0.97) * foamLight, foamAmt);
+  return vec4f(col, 1.0);
+}
+
+// Side walls: march through the water volume from the glass; meet the floor,
+// a creature, or the underside of the surface (Snell window / total internal reflection).
+struct SOut {
+  @builtin(position) pos: vec4f,
+  @location(0) wpos: vec3f,
+  @location(1) tpos: vec3f,
+  @location(2) @interpolate(flat) side: u32,
+};
+@vertex fn vsSide(@builtin(vertex_index) vi: u32) -> SOut {
+  // 4 walls, each a strip of segments; two vertices (bottom, top) per column.
+  let segX = u32(NX); let segZ = u32(NZ);
+  var w = 0u; var k = vi;
+  let nx2 = segX * 2u; let nz2 = segZ * 2u;
+  if (k >= nx2) { k -= nx2; w = 1u; if (k >= nx2) { k -= nx2; w = 2u; if (k >= nz2) { k -= nz2; w = 3u; } } }
+  let col = i32(k / 2u); let top = (k % 2u) == 1u;
+  var i = 0; var j = 0; var x = 0.0; var z = 0.0;
+  if (w == 0u) { i = col; j = NZ - 1; z = HZ - 0.002; }   // front (+z)
+  else if (w == 1u) { i = col; j = 0; z = -HZ + 0.002; }   // back (-z)
+  else if (w == 2u) { j = col; i = NX - 1; x = HX - 0.002; } // right (+x)
+  else { j = col; i = 0; x = -HX + 0.002; }                  // left (-x)
+  if (w < 2u) { x = -HX + (f32(i) + 0.5) * DX; if (i == 0) { x = -HX; } if (i == NX - 1) { x = HX; } }
+  else { z = -HZ + (f32(j) + 0.5) * DX; if (j == 0) { z = -HZ; } if (j == NZ - 1) { z = HZ; } }
+  let c = stAt(i, j);
+  let wet = c.w > 0.003;
+  var y = c.y;
+  if (top) { y = select(c.y, min(c.x, RIM - 0.015), wet); }
+  let tp = vec3f(x, y, z);
+  let wp = F.block * vec4f(tp, 1.0);
+  var o: SOut;
+  o.pos = F.viewProj * wp;
+  o.wpos = wp.xyz;
+  o.tpos = tp;
+  o.side = w;
+  return o;
+}
+@fragment fn fsSide(v: SOut) -> @location(0) vec4f {
+  var nOut = vec3f(0.0, 0.0, 1.0);
+  if (v.side == 1u) { nOut = vec3f(0.0, 0.0, -1.0); }
+  if (v.side == 2u) { nOut = vec3f(1.0, 0.0, 0.0); }
+  if (v.side == 3u) { nOut = vec3f(-1.0, 0.0, 0.0); }
+  let camT = (F.invBlock * vec4f(F.camPos.xyz, 1.0)).xyz;
+  let toCam = camT - v.tpos;
+  if (dot(toCam, nOut) <= 0.0) { discard; }
+  let pix = vec2i(v.pos.xy);
+  let distW = distance(F.camPos.xyz, v.wpos);
+  let dOpaque = textureLoad(sceneAux, pix, 0).x;
+  if (dOpaque < distW - 0.004) { discard; }
+  let d = -normalize(toCam);
+  let tMax = min(max(dOpaque - distW, 0.0), tankExit(v.tpos, d));
+  // March toward the far side looking for the underside of the surface.
+  var tHit = -1.0;
+  var tPrev = 0.0;
+  let steps = 28;
+  for (var k = 1; k <= steps; k++) {
+    let t = tMax * f32(k) / f32(steps);
+    let p = v.tpos + d * t;
+    let s = stSample(p.xz);
+    if (s.w > 0.003 && p.y > s.x) {
+      // refine
+      var a = tPrev; var b = t;
+      for (var r = 0; r < 5; r++) {
+        let m = 0.5 * (a + b); let pm = v.tpos + d * m;
+        if (pm.y > stSample(pm.xz).x) { b = m; } else { a = m; }
+      }
+      tHit = b;
+      break;
+    }
+    tPrev = t;
+  }
+  let sigma = waterSigma();
+  let scatter = F.fog.rgb * (F.skyCol.w * 0.9 + F.sunDir.w * 0.12);
+  var col: vec3f;
+  if (tHit > 0.0) {
+    let p = v.tpos + d * tHit;
+    let e = 0.05;
+    let hx = stSample(p.xz + vec2f(e, 0.0)).x - stSample(p.xz - vec2f(e, 0.0)).x;
+    let hz = stSample(p.xz + vec2f(0.0, e)).x - stSample(p.xz - vec2f(0.0, e)).x;
+    let nUp = normalize(vec3f(-hx / (2.0 * e), 1.0, -hz / (2.0 * e)));
+    // from water (n = 1.333) into air through the surface
+    let cosI = dot(d, nUp);
+    let sin2T = 1.777 * (1.0 - cosI * cosI);
+    var under: vec3f;
+    if (sin2T >= 1.0) {
+      // total internal reflection: a silvery mirror of the darker water below
+      let rd = reflect(d, -nUp);
+      under = scatter * 1.6 + vec3f(0.02, 0.035, 0.05) * (0.5 + 0.5 * rd.y) + F.sunDir.w * vec3f(0.02, 0.03, 0.04);
+    } else {
+      let tw = refract(d, -nUp, 1.333);
+      let wd = normalize((F.block * vec4f(tw, 0.0)).xyz);
+      let fr = schlick(0.02, abs(cosI));
+      under = mix(skyEnv(wd) * 1.1, scatter * 1.5, fr);
+    }
+    let T = exp(-sigma * tHit);
+    col = under * T + scatter * (1.0 - T);
+  } else {
+    let behind = textureLoad(sceneColor, pix, 0).rgb;
+    let T = exp(-sigma * tMax);
+    col = behind * T + scatter * (1.0 - T);
+  }
+  // Crisp waterline: a thin bright meniscus on the glass.
+  let sEdge = stSample(v.tpos.xz).x;
+  let ml = smoothstep(0.012, 0.0, sEdge - v.tpos.y);
+  col += ml * (F.skyCol.rgb * F.skyCol.w * 0.6 + F.sunColor.rgb * F.sunDir.w * 0.08);
+  return vec4f(col, 1.0);
+}
+
+// Copy the resolved opaque image into the composite target.
+struct QOut { @builtin(position) pos: vec4f };
+@vertex fn vsQuad(@builtin(vertex_index) vi: u32) -> QOut {
+  let p = vec2f(f32((vi << 1u) & 2u), f32(vi & 2u));
+  var o: QOut; o.pos = vec4f(p * 2.0 - 1.0, 0.0, 1.0); return o;
+}
+@fragment fn fsCopy(v: QOut) -> @location(0) vec4f {
+  return vec4f(textureLoad(sceneColor, vec2i(v.pos.xy), 0).rgb, 1.0);
+}
+`;
+
+// Glass block: thin walls with Fresnel reflections of the studio and greenish thick edges.
+const WGSL_GLASS = WGSL_PRELUDE + /* wgsl */`
+@group(0) @binding(1) var sceneAux: texture_2d<f32>;
+struct GIn { @location(0) pos: vec3f, @location(1) nrm: vec3f, @location(2) edge: f32 };
+struct GOut { @builtin(position) pos: vec4f, @location(0) wpos: vec3f, @location(1) nrm: vec3f, @location(2) tpos: vec3f, @location(3) edge: f32 };
+@vertex fn vsGlass(g: GIn) -> GOut {
+  let w = F.block * vec4f(g.pos, 1.0);
+  var o: GOut;
+  o.pos = F.viewProj * w; o.wpos = w.xyz; o.nrm = (F.block * vec4f(g.nrm, 0.0)).xyz; o.tpos = g.pos; o.edge = g.edge;
+  return o;
+}
+@fragment fn fsGlass(g: GOut) -> @location(0) vec4f {
+  let dist = distance(F.camPos.xyz, g.wpos);
+  let dO = textureLoad(sceneAux, vec2i(g.pos.xy), 0).x;
+  if (dO < dist - 0.01) { discard; }
+  let V = normalize(F.camPos.xyz - g.wpos);
+  var n = normalize(g.nrm);
+  let facing = dot(n, V);
+  if (facing < 0.0) { n = -n; }
+  let c = abs(facing);
+  let fr = schlick(0.045, c);
+  let R = reflect(-V, n);
+  var env = skyEnv(R);
+  // studio strip lights reflected in the glass
+  let strip = smoothstep(0.95, 0.99, abs(R.x * 0.8 + R.y * 0.6)) * 0.45 + smoothstep(0.97, 0.997, R.y) * 0.35;
+  env += vec3f(1.0) * strip * (F.skyCol.w * 0.6 + F.sunDir.w * 0.25);
+  // thick-glass edges: rim and vertical corners
+  let tp = g.tpos;
+  // distance to the vertical edges of this face (measured along the face, not across it)
+  let nl = normalize((F.invBlock * vec4f(n, 0.0)).xyz);
+  let ex = HX + ${GLASS_T.toFixed(3)} - abs(tp.x); let ez = HZ + ${GLASS_T.toFixed(3)} - abs(tp.z);
+  let along = select(ez, ex, abs(nl.z) > 0.5);
+  let corner = select(1.0 - smoothstep(0.0, 0.07, along), 0.0, abs(nl.y) > 0.5);
+  let rim = 1.0 - smoothstep(0.0, 0.045, RIM - tp.y);
+  let edge = max(max(corner, rim), g.edge);
+  let tint = vec3f(0.66, 0.76, 0.75) * (F.skyCol.w * 0.7 + F.sunDir.w * 0.2);
+  let back = select(1.0, 0.5, facing < 0.0);
+  let a = clamp((fr * 0.55 + edge * 0.3 + 0.01) * back, 0.0, 0.7);
+  let col = (env * fr * 0.6 + tint * edge * 0.4) * back;
+  return vec4f(col, a);
+}
+`;
+
+// Particles: GPU snow (procedural positions) and CPU puffs (spout mist, splashes).
+const WGSL_PARTICLES = WGSL_PRELUDE + /* wgsl */`
+@group(0) @binding(1) var sceneAux: texture_2d<f32>;
+struct Puff { pos: vec4f, col: vec4f };
+@group(0) @binding(2) var<storage, read> puffs: array<Puff>;
+struct POut { @builtin(position) pos: vec4f, @location(0) q: vec2f, @location(1) col: vec4f, @location(2) dist: f32 };
+fn corner(vi: u32) -> vec2f {
+  var c = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, -1.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
+  return c[vi];
+}
+fn hash31(n: f32) -> vec3f { return fract(sin(vec3f(n, n + 1.31, n + 2.77) * vec3f(43758.5453, 22578.1459, 19642.3490))); }
+@vertex fn vsSnow(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> POut {
+  var o: POut;
+  let fi = f32(ii);
+  if (fi >= F.snow.w) { o.pos = vec4f(2.0, 2.0, 2.0, 1.0); return o; }
+  let h = hash31(fi * 0.6180339 + 0.123);
+  let h2 = hash31(fi * 1.3247 + 7.7);
+  let box = vec3f(24.0, 13.0, 20.0);
+  let lo = vec3f(-12.0, ${FLOOR_Y.toFixed(3)}, -10.0);
+  let t = F.camPos.w;
+  let speed = 0.75 + 0.5 * h2.x;
+  var p = vec3f(h.x * box.x, h.y * box.y - F.snow.z * speed, h.z * box.z);
+  p.x += F.snow.x * (0.75 + 0.5 * h2.y) + sin(t * (0.6 + h2.z) + h.x * 40.0) * 0.18;
+  p.z += F.snow.y * (0.75 + 0.5 * h2.z) + cos(t * (0.5 + h2.y) + h.z * 40.0) * 0.18;
+  p = lo + (p - box * floor(p / box));
+  let size = mix(0.026, 0.046, h2.y) * (1.0 + F.misc.y * 0.15);
+  let c = corner(vi);
+  // blizzard flakes streak along the wind
+  let wind = vec3f(F.misc.w, -1.6 * speed, F.misc.w * 0.35);
+  let wv = (wind.x * F.camRight.xyz.x + wind.y * F.camRight.xyz.y + wind.z * F.camRight.xyz.z);
+  let wu = (wind.x * F.camUp.xyz.x + wind.y * F.camUp.xyz.y + wind.z * F.camUp.xyz.z);
+  let streak = vec2f(wv, wu) * 0.018 * F.misc.y;
+  let off = F.camRight.xyz * (c.x * size + streak.x * c.y) + F.camUp.xyz * (c.y * size + streak.y * c.y);
+  let w = p + off;
+  o.pos = F.viewProj * vec4f(w, 1.0);
+  o.q = c;
+  let lum = F.skyCol.rgb * F.skyCol.w * 1.3 + F.sunColor.rgb * F.sunDir.w * 0.25 + (F.lc0.rgb * F.lp0.w + F.lc1.rgb * F.lp1.w) * 0.01;
+  o.col = vec4f(lum, 0.85 * F.misc.x);
+  o.dist = distance(F.camPos.xyz, p);
+  return o;
+}
+@vertex fn vsPuff(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> POut {
+  let pf = puffs[ii];
+  var o: POut;
+  if (pf.col.a <= 0.0) { o.pos = vec4f(2.0, 2.0, 2.0, 1.0); return o; }
+  let c = corner(vi);
+  let w = pf.pos.xyz + (F.camRight.xyz * c.x + F.camUp.xyz * c.y) * pf.pos.w;
+  o.pos = F.viewProj * vec4f(w, 1.0);
+  o.q = c;
+  let lum = F.skyCol.rgb * F.skyCol.w * 1.2 + F.sunColor.rgb * F.sunDir.w * 0.35 + (F.lc0.rgb * F.lp0.w + F.lc1.rgb * F.lp1.w) * 0.015;
+  o.col = vec4f(pf.col.rgb * lum, pf.col.a);
+  o.dist = distance(F.camPos.xyz, pf.pos.xyz);
+  return o;
+}
+@fragment fn fsParticle(p: POut) -> @location(0) vec4f {
+  let r = length(p.q);
+  if (r > 1.0) { discard; }
+  let dO = textureLoad(sceneAux, vec2i(p.pos.xy), 0).x;
+  let soft = clamp((dO - p.dist) * 4.0, 0.0, 1.0);
+  let a = p.col.a * smoothstep(1.0, 0.15, r) * soft;
+  return vec4f(p.col.rgb * a, a);
+}
+`;
+
+// Exposure, Khronos PBR Neutral tone mapping, sRGB encode, a touch of dither.
+const WGSL_TONEMAP = WGSL_PRELUDE + /* wgsl */`
+@group(0) @binding(1) var hdrTex: texture_2d<f32>;
+struct QOut { @builtin(position) pos: vec4f };
+@vertex fn vsQuad(@builtin(vertex_index) vi: u32) -> QOut {
+  let p = vec2f(f32((vi << 1u) & 2u), f32(vi & 2u));
+  var o: QOut; o.pos = vec4f(p * 2.0 - 1.0, 0.0, 1.0); return o;
+}
+fn neutral(c0: vec3f) -> vec3f {
+  let startC = 0.76; let desat = 0.15;
+  let x = min(c0.r, min(c0.g, c0.b));
+  let off = select(0.04, x - 6.25 * x * x, x < 0.08);
+  var c = c0 - off;
+  let peak = max(c.r, max(c.g, c.b));
+  if (peak < startC) { return c; }
+  let d = 1.0 - startC;
+  let np = 1.0 - d * d / (peak + d - startC);
+  c *= np / peak;
+  let g = 1.0 - 1.0 / (desat * (peak - np) + 1.0);
+  return mix(c, vec3f(np), g);
+}
+fn toSRGB(c: vec3f) -> vec3f {
+  let lo = c * 12.92;
+  let hi = 1.055 * pow(max(c, vec3f(0.0)), vec3f(1.0 / 2.4)) - 0.055;
+  return select(hi, lo, c <= vec3f(0.0031308));
+}
+@fragment fn fsTonemap(v: QOut) -> @location(0) vec4f {
+  let hdr = textureLoad(hdrTex, vec2i(v.pos.xy), 0).rgb * F.gndCol.w;
+  var c = toSRGB(clamp(neutral(max(hdr, vec3f(0.0))), vec3f(0.0), vec3f(1.0)));
+  c += (hash12(v.pos.xy + fract(F.camPos.w) * 61.0) - 0.5) / 255.0;
+  return vec4f(c, 1.0);
+}
+`;
+// ============================================================================
+// Geometry: static diorama (terrain, strata, igloo, lantern, rocks), glass
+// shell, the deformable jelly bed, and lofting helpers for bodies and hulls.
+// ============================================================================
+
+// Catmull-Rom through a table of [s, ...values] rows (s ascending).
+function profileAt(table, s) {
+  s = clamp(s, table[0][0], table[table.length - 1][0]);
+  let k = 0;
+  while (k < table.length - 2 && table[k + 1][0] < s) k++;
+  const p0 = table[Math.max(k - 1, 0)], p1 = table[k], p2 = table[k + 1], p3 = table[Math.min(k + 2, table.length - 1)];
+  const t = (s - p1[0]) / Math.max(p2[0] - p1[0], 1e-6), t2 = t * t, t3 = t2 * t;
+  const out = [];
+  for (let i = 1; i < p1.length; i++) {
+    const v = 0.5 * (2 * p1[i] + (-p0[i] + p2[i]) * t + (2 * p0[i] - 5 * p1[i] + 4 * p2[i] - p3[i]) * t2 + (-p0[i] + 3 * p1[i] - 3 * p2[i] + p3[i]) * t3);
+    out.push(Math.max(v, 0.0005));
+  }
+  return out;
+}
+
+// Frames along a spine (nose first). T points toward the nose, S to the right, N up.
+function spineFrames(pts, upRef = [0, 1, 0]) {
+  const n = pts.length, frames = new Array(n);
+  let prevS = [0, 0, 1];
+  for (let k = 0; k < n; k++) {
+    const a = pts[Math.max(k - 1, 0)], b = pts[Math.min(k + 1, n - 1)];
+    const T = V3.norm(V3.sub(a, b));
+    let S = V3.cross(T, upRef);
+    if (V3.len(S) < 1e-4) S = prevS;
+    S = V3.norm(S);
+    const N = V3.cross(S, T);
+    prevS = S;
+    frames[k] = { p: pts[k], T, S, N };
+  }
+  return frames;
+}
+
+// Loft closed rings. ring = { c, a (unit, sin axis), b (unit, cos axis), ra, rb, rbNeg?, t (unit forward) }.
+// Angle runs from -π (bottom) over the top (0) back to π, so the uv seam sits on the belly.
+function loftRings(mb, rings, seg, colFn, mat, capFront = 0, capBack = 0) {
+  const n = rings.length, P = new Array(n);
+  for (let k = 0; k < n; k++) {
+    const r = rings[k], row = new Array(seg);
+    for (let m = 0; m < seg; m++) {
+      const th = -Math.PI + (TAU * m) / seg, sn = Math.sin(th), cs = Math.cos(th);
+      const rb = cs < 0 && r.rbNeg !== undefined ? r.rbNeg : r.rb;
+      row[m] = [r.c[0] + r.a[0] * r.ra * sn + r.b[0] * rb * cs, r.c[1] + r.a[1] * r.ra * sn + r.b[1] * rb * cs, r.c[2] + r.a[2] * r.ra * sn + r.b[2] * rb * cs];
+    }
+    P[k] = row;
+  }
+  const base = mb.nv;
+  for (let k = 0; k < n; k++) {
+    const c = rings[k].c, s = n > 1 ? k / (n - 1) : 0;
+    for (let m = 0; m <= seg; m++) {
+      const mm = m % seg;
+      const dth = V3.sub(P[k][(mm + 1) % seg], P[k][(mm - 1 + seg) % seg]);
+      const dk = V3.sub(P[Math.max(k - 1, 0)][mm], P[Math.min(k + 1, n - 1)][mm]);
+      let nr = V3.cross(dth, dk);
+      const out = V3.sub(P[k][mm], c);
+      if (V3.len(nr) < 1e-10) nr = out;
+      nr = V3.norm(nr);
+      if (V3.dot(nr, out) < 0) nr = V3.mul(nr, -1);
+      const th = -Math.PI + (TAU * m) / seg;
+      mb.vert(P[k][mm], nr, colFn(s, th), s, m / seg, mat);
+    }
+  }
+  const W = seg + 1;
+  for (let k = 0; k < n - 1; k++) for (let m = 0; m < seg; m++) {
+    const a = base + k * W + m, b = a + 1, c = a + W, d = c + 1;
+    mb.quad(a, c, d, b);
+  }
+  if (capFront) {
+    const r = rings[0], tip = mb.vert(V3.madd(r.c, r.t, capFront), r.t, colFn(0, 0), 0, 0.5, mat);
+    for (let m = 0; m < seg; m++) mb.tri(tip, base + m, base + m + 1);
+  }
+  if (capBack) {
+    const r = rings[n - 1], t = V3.mul(r.t, -1), tip = mb.vert(V3.madd(r.c, t, capBack), t, colFn(1, 0), 1, 0.5, mat);
+    const o = base + (n - 1) * W;
+    for (let m = 0; m < seg; m++) mb.tri(tip, o + m, o + m + 1);
+  }
+  return P;
+}
+
+// Surface of a lofted body at spine sample k, angle th (same convention as loftRings).
+function bodyPoint(ring, th, lift = 1) {
+  const sn = Math.sin(th), cs = Math.cos(th);
+  const rb = cs < 0 && ring.rbNeg !== undefined ? ring.rbNeg : ring.rb;
+  return V3.add(ring.c, V3.add(V3.mul(ring.a, ring.ra * sn * lift), V3.mul(ring.b, rb * cs * lift)));
+}
+
+// ---------------------------------------------------------------------------
+// Static diorama, tank-local coordinates.
+// ---------------------------------------------------------------------------
+function buildStatic() {
+  const mb = new MeshBuilder(48000, 260000);
+  const W = NX + 1, Hn = NZ + 1, white = [1, 1, 1];
+  // Terrain (sea floor + island), sampled at cell corners.
+  const tBase = mb.nv;
+  for (let j = 0; j < Hn; j++) for (let i = 0; i < W; i++) {
+    const x = -HX + i * DX, z = -HZ + j * DX, y = groundAt(x, z);
+    const e = DX * 0.7;
+    const nx = groundAt(x - e, z) - groundAt(x + e, z), nz = groundAt(x, z - e) - groundAt(x, z + e);
+    mb.vert([x, y, z], V3.norm([nx, 2 * e, nz]), white, x, z, 8);
+  }
+  for (let j = 0; j < NZ; j++) for (let i = 0; i < NX; i++) {
+    const a = tBase + j * W + i;
+    mb.quad(a, a + W, a + W + 1, a + 1);
+  }
+  // Strata skirt on the four glass sides, and the block bottom.
+  const skirt = (pts, n) => {
+    const b = mb.nv;
+    for (const [x, z] of pts) {
+      mb.vert([x, groundAt(x, z), z], n, white, x + z, 0, 9);
+      mb.vert([x, BLOCK_BOTTOM, z], n, white, x + z, 1, 9);
+    }
+    for (let k = 0; k < pts.length - 1; k++) { const a = b + k * 2; mb.quad(a, a + 1, a + 3, a + 2); }
+  };
+  const along = (n, f) => Array.from({ length: n + 1 }, (_, k) => f(k / n));
+  skirt(along(NX, (t) => [-HX + t * TW, HZ]), [0, 0, 1]);
+  skirt(along(NX, (t) => [-HX + t * TW, -HZ]), [0, 0, -1]);
+  skirt(along(NZ, (t) => [HX, -HZ + t * TD]), [1, 0, 0]);
+  skirt(along(NZ, (t) => [-HX, -HZ + t * TD]), [-1, 0, 0]);
+  {
+    const b = mb.nv, n = [0, -1, 0];
+    for (const [x, z] of [[-HX, -HZ], [HX, -HZ], [HX, HZ], [-HX, HZ]]) mb.vert([x, BLOCK_BOTTOM, z], n, [0.25, 0.24, 0.23], 0, 0, 0);
+    mb.quad(b, b + 1, b + 2, b + 3);
+  }
+
+  // Igloo: a dome of snow blocks with an entrance tunnel facing the lantern.
+  const ig = IGLOO_POS, igY = groundAt(ig[0], ig[2]) - 0.03, R = 0.4, Hh = 0.33, segs = 30, rings = 10;
+  {
+    const b = mb.nv;
+    for (let r = 0; r <= rings; r++) {
+      const phi = (Math.PI / 2) * (r / rings), cr = Math.cos(phi), sr = Math.sin(phi);
+      for (let s = 0; s <= segs; s++) {
+        const a = (TAU * s) / segs, ca = Math.cos(a), sa = Math.sin(a);
+        const p = [ig[0] + R * cr * ca, igY + Hh * sr, ig[2] + R * cr * sa];
+        const n = V3.norm([cr * ca / R, sr / Hh, cr * sa / R]);
+        mb.vert(p, n, [0.93, 0.94, 0.96], s / segs, r / rings, 6);
+      }
+    }
+    for (let r = 0; r < rings; r++) for (let s = 0; s < segs; s++) {
+      const a = b + r * (segs + 1) + s;
+      mb.quad(a, a + segs + 1, a + segs + 2, a + 1);
+    }
+  }
+  const doorDir = V3.norm([LANTERN_POS[0] - ig[0], 0, LANTERN_POS[2] - ig[2]]);
+  const doorSide = V3.cross(doorDir, [0, 1, 0]);
+  {
+    const tr = 0.16, th = 0.17, len = 0.3, b = mb.nv, segT = 12;
+    for (let k = 0; k <= 3; k++) {
+      const t = R * 0.82 + (len * k) / 3, c = [ig[0] + doorDir[0] * t, igY, ig[2] + doorDir[2] * t];
+      for (let s = 0; s <= segT; s++) {
+        const a = (Math.PI * s) / segT, ca = Math.cos(a), sa = Math.sin(a);
+        const p = V3.add(c, V3.add(V3.mul(doorSide, tr * ca), [0, th * sa, 0]));
+        const n = V3.norm(V3.add(V3.mul(doorSide, ca), [0, sa, 0]));
+        mb.vert(p, n, [0.92, 0.93, 0.95], s / segT, k / 3, 6);
+      }
+    }
+    for (let k = 0; k < 3; k++) for (let s = 0; s < segT; s++) {
+      const a = b + k * (segT + 1) + s;
+      mb.quad(a, a + segT + 1, a + segT + 2, a + 1);
+    }
+    // Doorway: a warm half-disc a little inside the tunnel mouth.
+    const dc = [ig[0] + doorDir[0] * (R * 0.82 + len - 0.03), igY, ig[2] + doorDir[2] * (R * 0.82 + len - 0.03)], d0 = mb.nv;
+    mb.vert(dc, doorDir, [0.9, 0.52, 0.24], 0, 0, 7);
+    for (let s = 0; s <= segT; s++) {
+      const a = (Math.PI * s) / segT;
+      mb.vert(V3.add(dc, V3.add(V3.mul(doorSide, (tr - 0.025) * Math.cos(a)), [0, (th - 0.025) * Math.sin(a), 0])), doorDir, [1.0, 0.62, 0.3], 0, 0, 7);
+    }
+    for (let s = 0; s < segT; s++) mb.tri(d0, d0 + 1 + s, d0 + 2 + s);
+  }
+  // Snow mounds around the igloo base.
+  for (let k = 0; k < 7; k++) {
+    const a = k * 0.9 + 0.4, rr = R + 0.06;
+    if (Math.cos(a - Math.atan2(doorDir[2], doorDir[0])) > 0.8) continue;
+    const p = [ig[0] + Math.cos(a) * rr, igY + 0.01, ig[2] + Math.sin(a) * rr];
+    addEllipsoid(mb, p, [0.12, 0, 0], [0, 0.05, 0], [0, 0, 0.1], [0.94, 0.95, 0.97], 3, 10, 5);
+  }
+
+  // Lantern on a post near the shore.
+  const lp = LANTERN_POS, lpY = groundAt(lp[0], lp[2]) - 0.02, post = 0.46;
+  const wood = [0.36, 0.25, 0.17], iron = [0.1, 0.1, 0.11];
+  addBox(mb, [lp[0], lpY + post / 2, lp[2]], [0.02, 0, 0], [0, post / 2, 0], [0, 0, 0.02], wood, 4, 2);
+  const armDir = V3.norm([-0.45, 0, 1]);
+  const armC = V3.add([lp[0], lpY + post - 0.03, lp[2]], V3.mul(armDir, 0.07));
+  addBox(mb, armC, V3.mul(armDir, 0.08), [0, 0.012, 0], V3.mul(V3.cross(armDir, [0, 1, 0]), 0.012), wood, 4);
+  const lampC = V3.add([lp[0], lpY + post - 0.1, lp[2]], V3.mul(armDir, 0.13));
+  addBox(mb, V3.add(lampC, [0, 0.055, 0]), [0.04, 0, 0], [0, 0.008, 0], [0, 0, 0.04], iron, 0);
+  addBox(mb, V3.add(lampC, [0, -0.055, 0]), [0.035, 0, 0], [0, 0.008, 0], [0, 0, 0.035], iron, 0);
+  addBox(mb, lampC, [0.027, 0, 0], [0, 0.048, 0], [0, 0, 0.027], [1.0, 0.68, 0.34], 7);
+  for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) addBox(mb, V3.add(lampC, [sx * 0.03, 0, sz * 0.03]), [0.005, 0, 0], [0, 0.05, 0], [0, 0, 0.005], iron, 0);
+  addBox(mb, V3.add(lampC, [0, 0.075, 0]), [0.004, 0, 0], [0, 0.015, 0], [0, 0, 0.004], iron, 0);
+  buildStatic.lampPos = lampC;
+  buildStatic.doorPos = V3.add([ig[0] + doorDir[0] * (R * 0.82 + 0.34), igY + 0.1, ig[2] + doorDir[2] * (R * 0.82 + 0.34)], [0, 0, 0]);
+
+  // Rocks on the shore and in the shallows.
+  rngState = 99;
+  for (let k = 0; k < 14; k++) {
+    const a = rand() * TAU, t = randRange(0.95, 1.4);
+    const R0 = ISLAND.R * (1 + 0.15 * Math.sin(a * 3 + 0.7) + 0.07 * Math.sin(a * 5 + 2.1));
+    const x = ISLAND.x + Math.cos(a) * R0 * t, z = ISLAND.z + Math.sin(a) * R0 * t / 1.12;
+    if (Math.hypot(x - SHORE_SEAL.x, z - SHORE_SEAL.z) < 0.5) continue;
+    const s = randRange(0.05, 0.13), y = groundAt(x, z);
+    const rot = rand() * TAU, ca = Math.cos(rot), sa = Math.sin(rot);
+    const g = randRange(0.3, 0.42);
+    addEllipsoid(mb, [x, y + s * 0.15, z], [s * ca, 0, s * sa], [0, s * 0.65, 0], [-s * 0.8 * sa, 0, s * 0.8 * ca], [g, g, g + 0.01], 0, 9, 6);
+  }
+  return mb;
+}
+
+// Glass shell: outer walls, inner walls, rim tops. Vertex: pos3 nrm3 edge1.
+function buildGlass() {
+  const v = [], idx = [];
+  const quad = (a, b, c, d, n, edge) => {
+    const base = v.length / 7;
+    for (const p of [a, b, c, d]) v.push(p[0], p[1], p[2], n[0], n[1], n[2], edge);
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  };
+  const ox = HX + GLASS_T, oz = HZ + GLASS_T, y0 = BLOCK_BOTTOM, y1 = RIM;
+  quad([-ox, y0, oz], [ox, y0, oz], [ox, y1, oz], [-ox, y1, oz], [0, 0, 1], 0);
+  quad([ox, y0, -oz], [-ox, y0, -oz], [-ox, y1, -oz], [ox, y1, -oz], [0, 0, -1], 0);
+  quad([ox, y0, oz], [ox, y0, -oz], [ox, y1, -oz], [ox, y1, oz], [1, 0, 0], 0);
+  quad([-ox, y0, -oz], [-ox, y0, oz], [-ox, y1, oz], [-ox, y1, -oz], [-1, 0, 0], 0);
+  quad([-HX, y0, HZ], [HX, y0, HZ], [HX, y1, HZ], [-HX, y1, HZ], [0, 0, -1], 0);
+  quad([HX, y0, -HZ], [-HX, y0, -HZ], [-HX, y1, -HZ], [HX, y1, -HZ], [0, 0, 1], 0);
+  quad([HX, y0, HZ], [HX, y0, -HZ], [HX, y1, -HZ], [HX, y1, HZ], [-1, 0, 0], 0);
+  quad([-HX, y0, -HZ], [-HX, y0, HZ], [-HX, y1, HZ], [-HX, y1, -HZ], [1, 0, 0], 0);
+  const up = [0, 1, 0];
+  quad([-ox, y1, HZ], [ox, y1, HZ], [ox, y1, oz], [-ox, y1, oz], up, 1);
+  quad([-ox, y1, -oz], [ox, y1, -oz], [ox, y1, -HZ], [-ox, y1, -HZ], up, 1);
+  quad([HX, y1, -HZ], [ox, y1, -HZ], [ox, y1, HZ], [HX, y1, HZ], up, 1);
+  quad([-ox, y1, -HZ], [-HX, y1, -HZ], [-HX, y1, HZ], [-ox, y1, HZ], up, 1);
+  return { v: new Float32Array(v), idx: new Uint32Array(idx) };
+}
+
+// ---------------------------------------------------------------------------
+// Jelly bed: a soft rounded slab under the block, rebuilt each frame so it can
+// shear with the block, bulge under the hand and wobble when pulled.
+// ---------------------------------------------------------------------------
+const JELLY = (() => {
+  const path = [], cr = 0.5, hx = JELLY_HX - cr, hz = JELLY_HZ - cr;
+  const corners = [[hx, hz, 0], [-hx, hz, Math.PI / 2], [-hx, -hz, Math.PI], [hx, -hz, Math.PI * 1.5]];
+  const edgeLens = [2 * hx, 2 * hz, 2 * hx, 2 * hz];
+  for (let c = 0; c < 4; c++) {
+    const [cx, cz, a0] = corners[c];
+    for (let k = 0; k < 9; k++) {
+      const a = a0 + (Math.PI / 2) * (k / 9);
+      path.push({ x: cx + Math.cos(a) * cr, z: cz + Math.sin(a) * cr, nx: Math.cos(a), nz: Math.sin(a) });
+    }
+    const [nx0, nz0] = [Math.cos(a0 + Math.PI / 2), Math.sin(a0 + Math.PI / 2)];
+    const [ncx, ncz] = [corners[(c + 1) % 4][0], corners[(c + 1) % 4][1]];
+    const sx = cx + nx0 * cr, sz = cz + nz0 * cr, ex = ncx + nx0 * cr, ez = ncz + nz0 * cr;
+    const steps = Math.max(2, Math.round(edgeLens[c] / 0.28));
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps;
+      path.push({ x: lerp(sx, ex, t), z: lerp(sz, ez, t), nx: nx0, nz: nz0 });
+    }
+  }
+  const top = JELLY_TOP, bot = JELLY_BOTTOM, h = top - bot, rt = 0.17, rbt = 0.13;
+  const prof = [[-0.7, top], [-0.35, top]];
+  for (let k = 0; k <= 5; k++) { const a = (Math.PI / 2) * (1 - k / 5); prof.push([-rt + rt * Math.cos(a), top - rt + rt * Math.sin(a)]); }
+  prof.push([0.0, bot + h * 0.5]);
+  for (let k = 0; k <= 4; k++) { const a = -(Math.PI / 2) * (k / 4); prof.push([-rbt + rbt * Math.cos(a), bot + rbt + rbt * Math.sin(a)]); }
+  prof.push([-0.4, bot]);
+  return { path, prof };
+})();
+
+function buildJelly(mb, blockM, pokes) {
+  const { path, prof } = JELLY, cols = path.length, rows = prof.length, base = mb.nv;
+  const top = JELLY_TOP, bot = JELLY_BOTTOM;
+  for (let r = 0; r < rows; r++) {
+    const [d0, y] = prof[r];
+    const t = clamp((y - bot) / (top - bot), 0, 1);
+    const side = Math.sin(Math.PI * t) * 0.045 * (d0 > -0.05 ? 1 : 0);
+    for (let c = 0; c < cols; c++) {
+      const P = path[c], d = d0 + side;
+      let p = [P.x + P.nx * d, y, P.z + P.nz * d];
+      // Top follows the block (shear and tilt), bottom stays on the floor.
+      const atTop = [p[0], top, p[2]], moved = M4.point(blockM, atTop);
+      const w = t * t * (3 - 2 * t);
+      p = [p[0] + (moved[0] - atTop[0]) * w, p[1] + (moved[1] - atTop[1]) * w, p[2] + (moved[2] - atTop[2]) * w];
+      for (const k of pokes) {
+        const dx = p[0] - k.a[0], dy = p[1] - k.a[1], dz = p[2] - k.a[2];
+        const f = Math.exp(-(dx * dx + dy * dy * 3 + dz * dz) / (k.r * k.r));
+        if (f > 0.002) { p[0] += k.d[0] * f; p[1] += k.d[1] * f * (0.4 + 0.6 * t); p[2] += k.d[2] * f; }
+      }
+      const shade = 0.86 + 0.14 * t;
+      mb.vert(p, [0, 1, 0], [0.72 * shade, 0.83 * shade, 0.86 * shade], c / cols, t, 5);
+    }
+  }
+  for (let r = 0; r < rows - 1; r++) for (let c = 0; c < cols; c++) {
+    const a = base + r * cols + c, b = base + r * cols + ((c + 1) % cols);
+    mb.quad(a, a + cols, b + cols, b);
+  }
+  mb.gridNormals(base, rows, cols, true, null);
+  // Orient normals outward using the undeformed profile: the profile runs
+  // clockwise in the (outward, up) plane, so its outward normal is left of travel.
+  for (let r = 0; r < rows; r++) {
+    const a = prof[Math.max(r - 1, 0)], b = prof[Math.min(r + 1, rows - 1)];
+    const td = b[0] - a[0], ty = b[1] - a[1], nd = -ty, ny = td;
+    for (let c = 0; c < cols; c++) {
+      const i = base + r * cols + c, o = i * FLOATS_PER_VERT + 3, P = path[c];
+      const exp = [P.nx * nd, ny, P.nz * nd];
+      if (mb.v[o] * exp[0] + mb.v[o + 1] * exp[1] + mb.v[o + 2] * exp[2] < 0) mb.setNormal(i, [-mb.v[o], -mb.v[o + 1], -mb.v[o + 2]]);
+    }
+  }
+  // Top cap (hidden under the block, closes the slab).
+  const capC = mb.vert(M4.point(blockM, [0, top, 0]), [0, 1, 0], [0.75, 0.83, 0.85], 0, 1, 5);
+  for (let c = 0; c < cols; c++) mb.tri(capC, base + c, base + ((c + 1) % cols));
+}
+// ============================================================================
+// Renderer. Frame: caustics (compute) → shadow map → opaque pass to HDR with
+// 4x MSAA plus a distance buffer → water/glass/particles into a composite →
+// neutral tone mapping to the canvas.
+// ============================================================================
+const FRAME_FLOATS = 156;
+const SHADOW_SIZE = 2048;
+
+class Renderer {
+  static async create(canvas) {
+    if (!navigator.gpu) throw new FrostbayError('no-webgpu', 'navigator.gpu is not available in this browser.');
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!adapter) throw new FrostbayError('no-adapter', 'The browser returned no WebGPU adapter.');
+    const device = await adapter.requestDevice();
+    const r = new Renderer(canvas, adapter, device);
+    await r.init();
+    return r;
+  }
+
+  constructor(canvas, adapter, device) {
+    this.canvas = canvas; this.adapter = adapter; this.device = device;
+    this.ctx = canvas.getContext('webgpu');
+    if (!this.ctx) throw new FrostbayError('no-context', 'Could not create a WebGPU canvas context.');
+    this.format = navigator.gpu.getPreferredCanvasFormat();
+    this.ctx.configure({ device, format: this.format, alphaMode: 'opaque' });
+    this.frame = new Float32Array(FRAME_FLOATS);
+    this.errors = [];
+    device.addEventListener('uncapturederror', (e) => {
+      const msg = String(e.error && e.error.message || e.error);
+      if (this.errors.length < 20) this.errors.push(msg);
+      console.error('WebGPU:', msg);
+    });
+    this.width = 0; this.height = 0;
+  }
+
+  async compile(label, code) {
+    const m = this.device.createShaderModule({ label, code });
+    const info = await m.getCompilationInfo();
+    const errs = info.messages.filter((x) => x.type === 'error');
+    if (errs.length) {
+      const lines = code.split('\n');
+      const detail = errs.slice(0, 4).map((e) => `${label}:${e.lineNum}:${e.linePos} ${e.message}\n    ${(lines[e.lineNum - 1] || '').trim()}`).join('\n');
+      throw new FrostbayError('shader', 'A shader failed to compile.\n' + detail);
+    }
+    this.compileWarnings = (this.compileWarnings || 0) + info.messages.filter((x) => x.type === 'warning').length;
+    return m;
+  }
+
+  async init() {
+    const d = this.device, GPU = GPUShaderStage, BU = GPUBufferUsage, TU = GPUTextureUsage;
+    d.pushErrorScope('validation');
+    const [mShadow, mOpaque, mCaustic, mWater, mGlass, mPart, mTone] = await Promise.all([
+      this.compile('shadow', WGSL_SHADOW), this.compile('opaque', WGSL_OPAQUE), this.compile('caustics', WGSL_CAUSTICS),
+      this.compile('water', WGSL_WATER), this.compile('glass', WGSL_GLASS), this.compile('particles', WGSL_PARTICLES), this.compile('tonemap', WGSL_TONEMAP),
+    ]);
+    const VF = GPU.VERTEX | GPU.FRAGMENT;
+    const L = {
+      frameOnly: d.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPU.VERTEX, buffer: {} }] }),
+      opaque: d.createBindGroupLayout({ entries: [
+        { binding: 0, visibility: VF, buffer: {} },
+        { binding: 1, visibility: VF, texture: { sampleType: 'float' } },
+        { binding: 2, visibility: GPU.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 3, visibility: GPU.FRAGMENT, texture: { sampleType: 'depth' } },
+        { binding: 4, visibility: VF, sampler: { type: 'filtering' } },
+        { binding: 5, visibility: GPU.FRAGMENT, sampler: { type: 'comparison' } },
+      ] }),
+      model: d.createBindGroupLayout({ entries: [{ binding: 0, visibility: VF, buffer: {} }] }),
+      caustic: d.createBindGroupLayout({ entries: [
+        { binding: 0, visibility: GPU.COMPUTE, buffer: {} },
+        { binding: 1, visibility: GPU.COMPUTE, texture: { sampleType: 'float' } },
+        { binding: 2, visibility: GPU.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
+        { binding: 3, visibility: GPU.COMPUTE, sampler: { type: 'filtering' } },
+      ] }),
+      water: d.createBindGroupLayout({ entries: [
+        { binding: 0, visibility: VF, buffer: {} },
+        { binding: 1, visibility: VF, texture: { sampleType: 'float' } },
+        { binding: 2, visibility: GPU.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 3, visibility: GPU.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 4, visibility: VF, sampler: { type: 'filtering' } },
+      ] }),
+      glass: d.createBindGroupLayout({ entries: [
+        { binding: 0, visibility: VF, buffer: {} },
+        { binding: 1, visibility: GPU.FRAGMENT, texture: { sampleType: 'float' } },
+      ] }),
+      particles: d.createBindGroupLayout({ entries: [
+        { binding: 0, visibility: VF, buffer: {} },
+        { binding: 1, visibility: GPU.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 2, visibility: GPU.VERTEX, buffer: { type: 'read-only-storage' } },
+      ] }),
+      tone: d.createBindGroupLayout({ entries: [
+        { binding: 0, visibility: VF, buffer: {} },
+        { binding: 1, visibility: GPU.FRAGMENT, texture: { sampleType: 'float' } },
+      ] }),
+    };
+    this.L = L;
+    const PL = (...g) => d.createPipelineLayout({ bindGroupLayouts: g });
+    const meshLayout = { arrayStride: 48, attributes: [
+      { shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'float32x3' },
+      { shaderLocation: 2, offset: 24, format: 'float32x3' }, { shaderLocation: 3, offset: 36, format: 'float32x2' },
+      { shaderLocation: 4, offset: 44, format: 'float32' }] };
+    const HDR = 'rgba16float', MS = { count: 4 };
+    const opaqueTargets = [{ format: HDR }, { format: HDR }];
+    const premul = { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } };
+    const opaqueLayout = PL(L.opaque, L.model);
+
+    this.pShadow = d.createRenderPipeline({
+      label: 'shadow', layout: PL(L.frameOnly, L.model),
+      vertex: { module: mShadow, entryPoint: 'vsShadow', buffers: [{ arrayStride: 48, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 2.0 },
+    });
+    this.pBackdrop = d.createRenderPipeline({
+      label: 'backdrop', layout: opaqueLayout,
+      vertex: { module: mOpaque, entryPoint: 'vsBackdrop' },
+      fragment: { module: mOpaque, entryPoint: 'fsBackdrop', targets: opaqueTargets },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'always' }, multisample: MS,
+    });
+    this.pFloor = d.createRenderPipeline({
+      label: 'floor', layout: opaqueLayout,
+      vertex: { module: mOpaque, entryPoint: 'vsFloor' },
+      fragment: { module: mOpaque, entryPoint: 'fsFloor', targets: opaqueTargets },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' }, multisample: MS,
+    });
+    this.pLit = d.createRenderPipeline({
+      label: 'lit', layout: opaqueLayout,
+      vertex: { module: mOpaque, entryPoint: 'vsLit', buffers: [meshLayout] },
+      fragment: { module: mOpaque, entryPoint: 'fsLit', targets: opaqueTargets },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' }, multisample: MS,
+    });
+    this.pCaustic = d.createComputePipeline({ label: 'caustics', layout: PL(L.caustic), compute: { module: mCaustic, entryPoint: 'csCaustics' } });
+    const waterLayout = PL(L.water);
+    const wDepth = (write) => ({ format: 'depth24plus', depthWriteEnabled: write, depthCompare: write ? 'less' : 'always' });
+    this.pCopy = d.createRenderPipeline({
+      label: 'copy', layout: waterLayout,
+      vertex: { module: mWater, entryPoint: 'vsQuad' }, fragment: { module: mWater, entryPoint: 'fsCopy', targets: [{ format: HDR }] },
+      depthStencil: wDepth(false),
+    });
+    this.pWater = d.createRenderPipeline({
+      label: 'water', layout: waterLayout,
+      vertex: { module: mWater, entryPoint: 'vsWater' }, fragment: { module: mWater, entryPoint: 'fsWater', targets: [{ format: HDR }] },
+      primitive: { topology: 'triangle-list', cullMode: 'back' }, depthStencil: wDepth(true),
+    });
+    this.pSide = d.createRenderPipeline({
+      label: 'water-sides', layout: waterLayout,
+      vertex: { module: mWater, entryPoint: 'vsSide' }, fragment: { module: mWater, entryPoint: 'fsSide', targets: [{ format: HDR }] },
+      primitive: { topology: 'triangle-strip', cullMode: 'none' }, depthStencil: wDepth(true),
+    });
+    this.pGlass = d.createRenderPipeline({
+      label: 'glass', layout: PL(L.glass),
+      vertex: { module: mGlass, entryPoint: 'vsGlass', buffers: [{ arrayStride: 28, attributes: [
+        { shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'float32x3' }, { shaderLocation: 2, offset: 24, format: 'float32' }] }] },
+      fragment: { module: mGlass, entryPoint: 'fsGlass', targets: [{ format: HDR, blend: premul }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' },
+    });
+    const partLayout = PL(L.particles);
+    this.pSnow = d.createRenderPipeline({
+      label: 'snow', layout: partLayout,
+      vertex: { module: mPart, entryPoint: 'vsSnow' }, fragment: { module: mPart, entryPoint: 'fsParticle', targets: [{ format: HDR, blend: premul }] },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' },
+    });
+    this.pPuff = d.createRenderPipeline({
+      label: 'puffs', layout: partLayout,
+      vertex: { module: mPart, entryPoint: 'vsPuff' }, fragment: { module: mPart, entryPoint: 'fsParticle', targets: [{ format: HDR, blend: premul }] },
+      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' },
+    });
+    this.pTone = d.createRenderPipeline({
+      label: 'tonemap', layout: PL(L.tone),
+      vertex: { module: mTone, entryPoint: 'vsQuad' }, fragment: { module: mTone, entryPoint: 'fsTonemap', targets: [{ format: this.format }] },
+    });
+
+    // Buffers and fixed textures.
+    this.ubo = d.createBuffer({ size: FRAME_FLOATS * 4, usage: BU.UNIFORM | BU.COPY_DST });
+    this.modelBlock = d.createBuffer({ size: 80, usage: BU.UNIFORM | BU.COPY_DST });
+    this.modelWorld = d.createBuffer({ size: 80, usage: BU.UNIFORM | BU.COPY_DST });
+    const ident = M4.ident(), worldInfo = new Float32Array(20);
+    worldInfo.set(ident); d.queue.writeBuffer(this.modelWorld, 0, worldInfo);
+    this.stateTex = d.createTexture({ size: [NX, NZ], format: 'rgba16float', usage: TU.TEXTURE_BINDING | TU.COPY_DST });
+    this.causticTex = d.createTexture({ size: [CAUSTIC_W, CAUSTIC_H], format: 'rgba16float', usage: TU.TEXTURE_BINDING | TU.STORAGE_BINDING });
+    this.shadowTex = d.createTexture({ size: [SHADOW_SIZE, SHADOW_SIZE], format: 'depth32float', usage: TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING });
+    this.sampLin = d.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
+    this.sampCmp = d.createSampler({ compare: 'less', magFilter: 'linear', minFilter: 'linear' });
+
+    // Static meshes.
+    const st = buildStatic();
+    this.lampPos = buildStatic.lampPos; this.doorPos = buildStatic.doorPos;
+    this.staticV = this.makeBuffer(st.v.subarray(0, st.nv * FLOATS_PER_VERT), BU.VERTEX);
+    this.staticI = this.makeBuffer(st.idx.subarray(0, st.ni), BU.INDEX);
+    this.staticCount = st.ni;
+    const gl = buildGlass();
+    this.glassV = this.makeBuffer(gl.v, BU.VERTEX); this.glassI = this.makeBuffer(gl.idx, BU.INDEX); this.glassCount = gl.idx.length;
+    const wi = new Uint32Array((NX - 1) * (NZ - 1) * 6);
+    let k = 0;
+    for (let j = 0; j < NZ - 1; j++) for (let i = 0; i < NX - 1; i++) {
+      const a = i + j * NX, b = a + 1, c = a + NX, e = c + 1;
+      wi[k++] = a; wi[k++] = c; wi[k++] = b; wi[k++] = b; wi[k++] = c; wi[k++] = e;
+    }
+    this.waterI = this.makeBuffer(wi, BU.INDEX); this.waterCount = wi.length;
+    // Dynamic meshes (creatures/props in the block, jelly in the world).
+    this.dynBlock = new MeshBuilder(16000, 80000);
+    this.dynWorld = new MeshBuilder(5000, 26000);
+    this.dynBlockV = d.createBuffer({ size: this.dynBlock.v.byteLength, usage: BU.VERTEX | BU.COPY_DST });
+    this.dynBlockI = d.createBuffer({ size: this.dynBlock.idx.byteLength, usage: BU.INDEX | BU.COPY_DST });
+    this.dynWorldV = d.createBuffer({ size: this.dynWorld.v.byteLength, usage: BU.VERTEX | BU.COPY_DST });
+    this.dynWorldI = d.createBuffer({ size: this.dynWorld.idx.byteLength, usage: BU.INDEX | BU.COPY_DST });
+    this.maxPuffs = 640;
+    this.puffData = new Float32Array(this.maxPuffs * 8);
+    this.puffBuf = d.createBuffer({ size: this.puffData.byteLength, usage: BU.STORAGE | BU.COPY_DST });
+
+    this.bgFrameOnly = d.createBindGroup({ layout: L.frameOnly, entries: [{ binding: 0, resource: { buffer: this.ubo } }] });
+    this.bgModelBlock = d.createBindGroup({ layout: L.model, entries: [{ binding: 0, resource: { buffer: this.modelBlock } }] });
+    this.bgModelWorld = d.createBindGroup({ layout: L.model, entries: [{ binding: 0, resource: { buffer: this.modelWorld } }] });
+    this.bgCaustic = d.createBindGroup({ layout: L.caustic, entries: [
+      { binding: 0, resource: { buffer: this.ubo } }, { binding: 1, resource: this.stateTex.createView() },
+      { binding: 2, resource: this.causticTex.createView() }, { binding: 3, resource: this.sampLin }] });
+    this.bgOpaque = d.createBindGroup({ layout: L.opaque, entries: [
+      { binding: 0, resource: { buffer: this.ubo } }, { binding: 1, resource: this.stateTex.createView() },
+      { binding: 2, resource: this.causticTex.createView() }, { binding: 3, resource: this.shadowTex.createView() },
+      { binding: 4, resource: this.sampLin }, { binding: 5, resource: this.sampCmp }] });
+
+    const err = await d.popErrorScope();
+    if (err) throw new FrostbayError('pipeline', 'A render pipeline failed validation: ' + err.message);
+  }
+
+  makeBuffer(data, usage) {
+    const b = this.device.createBuffer({ size: Math.max(16, Math.ceil(data.byteLength / 4) * 4), usage: usage | GPUBufferUsage.COPY_DST });
+    this.device.queue.writeBuffer(b, 0, data.buffer, data.byteOffset, data.byteLength);
+    return b;
+  }
+
+  // Size render targets to the canvas, with a pixel budget so phones stay smooth.
+  resize(cssW, cssH, dpr) {
+    const budget = (cssW < 760 ? 1.25 : 2.2) * 1e6;
+    let scale = Math.min(dpr, 2);
+    if (cssW * cssH * scale * scale > budget) scale = Math.sqrt(budget / (cssW * cssH));
+    const w = Math.max(1, Math.round(cssW * scale)), h = Math.max(1, Math.round(cssH * scale));
+    if (w === this.width && h === this.height) return;
+    this.width = w; this.height = h;
+    this.canvas.width = w; this.canvas.height = h;
+    const d = this.device, TU = GPUTextureUsage;
+    for (const t of ['msColor', 'msAux', 'msDepth', 'sceneColor', 'sceneAux', 'composite', 'waterDepth']) if (this[t]) this[t].destroy();
+    const tex = (format, usage, sampleCount = 1) => d.createTexture({ size: [w, h], format, usage, sampleCount });
+    this.msColor = tex('rgba16float', TU.RENDER_ATTACHMENT, 4);
+    this.msAux = tex('rgba16float', TU.RENDER_ATTACHMENT, 4);
+    this.msDepth = tex('depth24plus', TU.RENDER_ATTACHMENT, 4);
+    this.sceneColor = tex('rgba16float', TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING);
+    this.sceneAux = tex('rgba16float', TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING);
+    this.composite = tex('rgba16float', TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING);
+    this.waterDepth = tex('depth24plus', TU.RENDER_ATTACHMENT);
+    const L = this.L;
+    this.bgWater = d.createBindGroup({ layout: L.water, entries: [
+      { binding: 0, resource: { buffer: this.ubo } }, { binding: 1, resource: this.stateTex.createView() },
+      { binding: 2, resource: this.sceneColor.createView() }, { binding: 3, resource: this.sceneAux.createView() },
+      { binding: 4, resource: this.sampLin }] });
+    this.bgGlass = d.createBindGroup({ layout: L.glass, entries: [{ binding: 0, resource: { buffer: this.ubo } }, { binding: 1, resource: this.sceneAux.createView() }] });
+    this.bgPart = d.createBindGroup({ layout: L.particles, entries: [
+      { binding: 0, resource: { buffer: this.ubo } }, { binding: 1, resource: this.sceneAux.createView() }, { binding: 2, resource: { buffer: this.puffBuf } }] });
+    this.bgTone = d.createBindGroup({ layout: L.tone, entries: [{ binding: 0, resource: { buffer: this.ubo } }, { binding: 1, resource: this.composite.createView() }] });
+  }
+
+  uploadState(packed) {
+    this.device.queue.writeTexture({ texture: this.stateTex }, packed.buffer, { bytesPerRow: NX * 8, rowsPerImage: NZ }, { width: NX, height: NZ });
+  }
+  uploadDynamic() {
+    const q = this.device.queue, b = this.dynBlock, w = this.dynWorld;
+    if (b.nv) { q.writeBuffer(this.dynBlockV, 0, b.v.buffer, 0, b.nv * 48); q.writeBuffer(this.dynBlockI, 0, b.idx.buffer, 0, b.ni * 4); }
+    if (w.nv) { q.writeBuffer(this.dynWorldV, 0, w.v.buffer, 0, w.nv * 48); q.writeBuffer(this.dynWorldI, 0, w.idx.buffer, 0, w.ni * 4); }
+  }
+  uploadPuffs(count) {
+    this.puffCount = count;
+    if (count) this.device.queue.writeBuffer(this.puffBuf, 0, this.puffData.buffer, 0, count * 32);
+  }
+  setBlockMatrix(m) {
+    const a = new Float32Array(20); a.set(m); a[16] = 1;
+    this.device.queue.writeBuffer(this.modelBlock, 0, a);
+  }
+
+  render(snowCount) {
+    const d = this.device, f = this.frame;
+    d.queue.writeBuffer(this.ubo, 0, f);
+    const enc = d.createCommandEncoder();
+    // Caustics.
+    {
+      const p = enc.beginComputePass();
+      p.setPipeline(this.pCaustic); p.setBindGroup(0, this.bgCaustic);
+      p.dispatchWorkgroups(Math.ceil(CAUSTIC_W / 8), Math.ceil(CAUSTIC_H / 8));
+      p.end();
+    }
+    const drawMeshes = (p) => {
+      p.setBindGroup(1, this.bgModelBlock);
+      p.setVertexBuffer(0, this.staticV); p.setIndexBuffer(this.staticI, 'uint32'); p.drawIndexed(this.staticCount);
+      if (this.dynBlock.ni) { p.setVertexBuffer(0, this.dynBlockV); p.setIndexBuffer(this.dynBlockI, 'uint32'); p.drawIndexed(this.dynBlock.ni); }
+      if (this.dynWorld.ni) { p.setBindGroup(1, this.bgModelWorld); p.setVertexBuffer(0, this.dynWorldV); p.setIndexBuffer(this.dynWorldI, 'uint32'); p.drawIndexed(this.dynWorld.ni); }
+    };
+    // Shadow map.
+    {
+      const p = enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: this.shadowTex.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
+      p.setPipeline(this.pShadow); p.setBindGroup(0, this.bgFrameOnly);
+      drawMeshes(p);
+      p.end();
+    }
+    // Opaque HDR + distance, 4x MSAA, resolved.
+    {
+      const p = enc.beginRenderPass({
+        colorAttachments: [
+          { view: this.msColor.createView(), resolveTarget: this.sceneColor.createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'discard' },
+          { view: this.msAux.createView(), resolveTarget: this.sceneAux.createView(), clearValue: [60, 99, 0, 0], loadOp: 'clear', storeOp: 'discard' }],
+        depthStencilAttachment: { view: this.msDepth.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard' },
+      });
+      p.setBindGroup(0, this.bgOpaque); p.setBindGroup(1, this.bgModelWorld);
+      p.setPipeline(this.pBackdrop); p.draw(3);
+      p.setPipeline(this.pFloor); p.draw(6);
+      p.setPipeline(this.pLit); drawMeshes(p);
+      p.end();
+    }
+    // Water, glass and particles into the composite.
+    {
+      const p = enc.beginRenderPass({
+        colorAttachments: [{ view: this.composite.createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store' }],
+        depthStencilAttachment: { view: this.waterDepth.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard' },
+      });
+      p.setBindGroup(0, this.bgWater);
+      p.setPipeline(this.pCopy); p.draw(3);
+      p.setPipeline(this.pWater); p.setIndexBuffer(this.waterI, 'uint32'); p.drawIndexed(this.waterCount);
+      p.setPipeline(this.pSide);
+      p.draw(NX * 2, 1, 0); p.draw(NX * 2, 1, NX * 2); p.draw(NZ * 2, 1, NX * 4); p.draw(NZ * 2, 1, NX * 4 + NZ * 2);
+      p.setPipeline(this.pGlass); p.setBindGroup(0, this.bgGlass);
+      p.setVertexBuffer(0, this.glassV); p.setIndexBuffer(this.glassI, 'uint32'); p.drawIndexed(this.glassCount);
+      p.setBindGroup(0, this.bgPart);
+      if (snowCount > 0) { p.setPipeline(this.pSnow); p.draw(6, snowCount); }
+      if (this.puffCount) { p.setPipeline(this.pPuff); p.draw(6, this.puffCount); }
+      p.end();
+    }
+    // Tone map to the canvas.
+    {
+      const p = enc.beginRenderPass({ colorAttachments: [{ view: this.ctx.getCurrentTexture().createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store' }] });
+      p.setPipeline(this.pTone); p.setBindGroup(0, this.bgTone); p.draw(3);
+      p.end();
+    }
+    d.queue.submit([enc.finish()]);
+  }
+}
+
+class FrostbayError extends Error {
+  constructor(code, message) { super(message); this.code = code; }
+}
+// ============================================================================
+// Life: the block on its jelly, floating things, kayak, seals, whale, puffs.
+// Everything here works in tank-local coordinates.
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// Block on jelly: damped springs that wobble back. Dragging a glass side sets
+// targets; the tilt and the block's acceleration feed the sea as a potential.
+// ---------------------------------------------------------------------------
+class Block {
+  constructor() { this.firmness = 0.5; this.reset(); }
+  reset() {
+    this.s = { ox: 0, oz: 0, rx: 0, rz: 0 }; this.v = { ox: 0, oz: 0, rx: 0, rz: 0 };
+    this.t = { ox: 0, oz: 0, rx: 0, rz: 0 }; this.acc = [0, 0]; this.held = false;
+    this.matrix = M4.ident(); this.inv = M4.ident();
+  }
+  update(dt) {
+    const k = lerp(16, 75, this.firmness), zeta = 0.13 + 0.12 * this.firmness, c = 2 * zeta * Math.sqrt(k);
+    for (const key of ['ox', 'oz', 'rx', 'rz']) {
+      const target = this.held ? this.t[key] : 0;
+      const a = k * (target - this.s[key]) - c * this.v[key];
+      this.v[key] += a * dt; this.s[key] += this.v[key] * dt;
+      if (key === 'ox') this.acc[0] = a;
+      if (key === 'oz') this.acc[1] = a;
+    }
+    this.s.rx = clamp(this.s.rx, -0.11, 0.11); this.s.rz = clamp(this.s.rz, -0.09, 0.09);
+    this.s.ox = clamp(this.s.ox, -0.7, 0.7); this.s.oz = clamp(this.s.oz, -0.7, 0.7);
+    this.matrix = M4.pivotRT(this.s.rx, this.s.rz, [0, BLOCK_BOTTOM, 0], [this.s.ox, 0, this.s.oz]);
+    this.inv = M4.invert(this.matrix);
+  }
+  // Effective gravity in the tank frame → slope of the level the sea wants.
+  seaTilt() {
+    const s = 0.06;
+    const g = M4.dir(this.inv, [-this.acc[0] * s, -GRAV, -this.acc[1] * s]);
+    return [g[0] / g[1], g[2] / g[1]];
+  }
+}
+
+// Jelly pokes: local displacements of the jelly that spring back with a wobble.
+class Pokes {
+  constructor() { this.list = []; this.firmness = 0.5; }
+  add(anchor, radius) { const p = { a: anchor.slice(), r: radius, d: [0, 0, 0], v: [0, 0, 0], held: true, target: [0, 0, 0] }; this.list.push(p); return p; }
+  update(dt) {
+    const k = lerp(30, 130, this.firmness), c = 2 * 0.11 * Math.sqrt(k);
+    for (const p of this.list) {
+      for (let i = 0; i < 3; i++) {
+        const tgt = p.held ? p.target[i] : 0;
+        if (p.held) { p.d[i] += (tgt - p.d[i]) * expDecay(dt, 0.06); p.v[i] = 0; }
+        else { p.v[i] += (k * (tgt - p.d[i]) - c * p.v[i]) * dt; p.d[i] += p.v[i] * dt; }
+      }
+    }
+    this.list = this.list.filter((p) => p.held || V3.len(p.d) + V3.len(p.v) * 0.1 > 0.002);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Floating things: follow local height and averaged slope, drift with the
+// water, bump each other, keep off the shallows and the glass.
+// ---------------------------------------------------------------------------
+class Floater {
+  constructor(o) {
+    Object.assign(this, { x: 0, z: 0, vx: 0, vz: 0, yaw: 0, yawV: 0, y: 0, vy: 0, heaveAcc: 0, pitch: 0, pv: 0, roll: 0, rv: 0,
+      len: 1, beam: 0.5, radius: 0.5, ride: 0.03, press: 0.02, mass: 1, held: false, slopeAlong: 0, slopeAcross: 0, meanH: 0 }, o);
+    this.home = { x: this.x, z: this.z, yaw: this.yaw };
+  }
+  resetHome() {
+    Object.assign(this, { x: this.home.x, z: this.home.z, yaw: this.home.yaw, vx: 0, vz: 0, yawV: 0, vy: 0, pitch: 0, pv: 0, roll: 0, rv: 0, held: false });
+    this.y = 0;
+  }
+  fwd() { return [Math.cos(this.yaw), Math.sin(this.yaw)]; }
+  sample(sea) {
+    const [fx, fz] = this.fwd(), rx = -fz, rz = fx;
+    let sum = 0, sa = 0, sc = 0, aa = 0, cc = 0, n = 0;
+    for (const a of [-0.42, -0.21, 0, 0.21, 0.42]) for (const b of [-0.5, 0, 0.5]) {
+      const ax = a * this.len, bx = b * this.beam;
+      const h = sea.surfaceAt(this.x + fx * ax + rx * bx, this.z + fz * ax + rz * bx);
+      sum += h; sa += ax * h; sc += bx * h; aa += ax * ax; cc += bx * bx; n++;
+    }
+    this.meanH = sum / n;
+    this.slopeAlong = sa / aa; this.slopeAcross = sc / cc;
+  }
+  update(dt, sea, env) {
+    this.sample(sea);
+    const lvl = sea.level;
+    // Heave, pitch and roll springs toward the local surface.
+    const vy0 = this.vy;
+    this.vy += (70 * (this.meanH + this.ride - this.y) - 10 * this.vy) * dt;
+    this.y += this.vy * dt;
+    this.heaveAcc = (this.vy - vy0) / Math.max(dt, 1e-4);
+    const pT = Math.atan(this.slopeAlong), rT = -Math.atan(this.slopeAcross);
+    this.pv += (55 * (pT - this.pitch) - 7 * this.pv) * dt; this.pitch += this.pv * dt;
+    this.rv += (55 * (rT - this.rollWave()) - 7 * this.rv) * dt; this.setRollWave(this.rollWave() + this.rv * dt);
+    if (this.held) return;
+    const [fx, fz] = this.fwd(), rx = -fz, rz = fx;
+    const gx = this.slopeAlong * fx + this.slopeAcross * rx, gz = this.slopeAlong * fz + this.slopeAcross * rz;
+    const [wu, wv] = sea.velAt(this.x, this.z);
+    let ax = -GRAV * 0.3 * gx + (wu - this.vx) * 1.4 + env.windX * 0.12;
+    let az = -GRAV * 0.3 * gz + (wv - this.vz) * 1.4 + env.windZ * 0.12;
+    // Keep off the shallows: push down the ground gradient when it gets shallow.
+    const g0 = sea.groundAtF(this.x, this.z);
+    const shallow = sstep(lvl - 0.42, lvl - 0.08, g0 + this.radius * 0.15);
+    if (shallow > 0) {
+      const e = 0.18;
+      const gdx = sea.groundAtF(this.x + e, this.z) - sea.groundAtF(this.x - e, this.z);
+      const gdz = sea.groundAtF(this.x, this.z + e) - sea.groundAtF(this.x, this.z - e);
+      const gl = Math.hypot(gdx, gdz) || 1;
+      ax -= (gdx / gl) * shallow * 3.2; az -= (gdz / gl) * shallow * 3.2;
+      this.vx *= 1 - shallow * 0.04; this.vz *= 1 - shallow * 0.04;
+    }
+    // Keep off the glass.
+    const m = this.radius + 0.06;
+    if (this.x > HX - m) ax -= 9 * (this.x - (HX - m)); if (this.x < -HX + m) ax += 9 * (-HX + m - this.x);
+    if (this.z > HZ - m) az -= 9 * (this.z - (HZ - m)); if (this.z < -HZ + m) az += 9 * (-HZ + m - this.z);
+    this.vx += ax * dt / this.mass; this.vz += az * dt / this.mass;
+    const damp = Math.exp(-dt * 0.4); this.vx *= damp; this.vz *= damp;
+    const sp = Math.hypot(this.vx, this.vz);
+    if (sp > 1.3) { this.vx *= 1.3 / sp; this.vz *= 1.3 / sp; }
+    this.x += this.vx * dt; this.z += this.vz * dt;
+    const hard = this.radius * 0.7;
+    if (this.x > HX - hard) { this.x = HX - hard; this.vx = -Math.abs(this.vx) * 0.3; }
+    if (this.x < -HX + hard) { this.x = -HX + hard; this.vx = Math.abs(this.vx) * 0.3; }
+    if (this.z > HZ - hard) { this.z = HZ - hard; this.vz = -Math.abs(this.vz) * 0.3; }
+    if (this.z < -HZ + hard) { this.z = -HZ + hard; this.vz = Math.abs(this.vz) * 0.3; }
+    // Elongated hulls turn slowly to lie along their drift.
+    if (this.len > this.beam * 1.6 && sp > 0.05) {
+      let d = wrapAngle(Math.atan2(this.vz, this.vx) - this.yaw);
+      if (d > Math.PI / 2) d -= Math.PI; else if (d < -Math.PI / 2) d += Math.PI;
+      this.yawV += d * 0.6 * sp * dt;
+    }
+    this.yawV += (wv * fx - wu * fz) * 0.15 * dt;
+    this.yawV *= Math.exp(-dt * 1.6); this.yaw += this.yawV * dt;
+  }
+  rollWave() { return this.roll; }
+  setRollWave(r) { this.roll = r; }
+  addWake(sea) {
+    const [fx, fz] = this.fwd();
+    if (this.len > this.beam * 1.6) {
+      for (const a of [-0.3, 0, 0.3]) sea.addBlob(this.x + fx * a * this.len, this.z + fz * a * this.len, this.press, this.beam * 0.7);
+    } else sea.addBlob(this.x, this.z, this.press, this.radius * 0.7);
+  }
+  matrix() { return frameMatrix([this.x, this.y, this.z], this.yaw, this.pitch, this.roll); }
+}
+
+function collideFloaters(list) {
+  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+    const a = list[i], b = list[j];
+    const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz), min = a.radius + b.radius;
+    if (d >= min || d < 1e-5) continue;
+    const nx = dx / d, nz = dz / d, over = min - d;
+    const wa = a.held ? 0 : b.held ? 1 : b.mass / (a.mass + b.mass), wb = b.held ? 0 : a.held ? 1 : a.mass / (a.mass + b.mass);
+    a.x -= nx * over * wa; a.z -= nz * over * wa; b.x += nx * over * wb; b.z += nz * over * wb;
+    const rv = (b.vx - a.vx) * nx + (b.vz - a.vz) * nz;
+    if (rv < 0) {
+      const j2 = -(1.35) * rv;
+      if (!a.held) { a.vx -= nx * j2 * wa; a.vz -= nz * j2 * wa; a.yawV += (Math.random() - 0.5) * 0.6; }
+      if (!b.held) { b.vx += nx * j2 * wb; b.vz += nz * j2 * wb; b.yawV += (Math.random() - 0.5) * 0.6; }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Kayak: draggable; a strong local wave (high swing AND steep averaged slope
+// across the hull) rolls it 180° and leaves it upside down.
+// ---------------------------------------------------------------------------
+class Kayak extends Floater {
+  constructor() {
+    super({ x: 0.9, z: 2.25, yaw: 0.35, len: 1.0, beam: 0.17, radius: 0.36, ride: 0.012, press: 0.022, mass: 0.8 });
+    this.resetKayak();
+  }
+  resetKayak() {
+    this.resetHome();
+    this.capsized = false; this.capsizing = 0; this.capDir = 1; this.flip = 0; this.slowH = 0; this.swingPeak = 0; this.acrossPeak = 0; this.trigger = 0;
+    this.waveRoll = 0; this.dragTarget = null; this.maxRock = 0;
+  }
+  rollWave() { return this.waveRoll; }
+  setRollWave(r) { this.waveRoll = clamp(r, -0.7, 0.7); }
+  update(dt, sea, env) {
+    super.update(dt, sea, env);
+    if (this.held && this.dragTarget) {
+      // Follow the hand, speed-limited, and never up onto the island or into the glass.
+      let [tx, tz] = this.dragTarget;
+      tx = clamp(tx, -HX + 0.4, HX - 0.4); tz = clamp(tz, -HZ + 0.4, HZ - 0.4);
+      let dvx = (tx - this.x) * 7, dvz = (tz - this.z) * 7;
+      const sp = Math.hypot(dvx, dvz);
+      if (sp > 1.8) { dvx *= 1.8 / sp; dvz *= 1.8 / sp; }
+      this.vx = lerp(this.vx, dvx, expDecay(dt, 0.08)); this.vz = lerp(this.vz, dvz, expDecay(dt, 0.08));
+      const nx = this.x + this.vx * dt, nz = this.z + this.vz * dt;
+      if (sea.groundAtF(nx, nz) < sea.level - 0.1) { this.x = nx; this.z = nz; } else { this.vx *= 0.3; this.vz *= 0.3; }
+      const s2 = Math.hypot(this.vx, this.vz);
+      if (s2 > 0.12) {
+        let d = wrapAngle(Math.atan2(this.vz, this.vx) - this.yaw);
+        this.yaw += clamp(d, -3 * dt, 3 * dt);
+      }
+    }
+    // Capsize detection: swing of the hull's mean height vs its recent average,
+    // and the averaged across-hull slope. Both must be large.
+    this.slowH = lerp(this.slowH, this.meanH, expDecay(dt, 0.7));
+    const swing = Math.abs(this.meanH - this.slowH);
+    this.swingPeak = Math.max(swing, this.swingPeak * Math.exp(-dt / 0.35));
+    // Recent peaks of both measures (a wave's swing and its steepest face arrive
+    // a fraction of a second apart).
+    const across = this.slopeAcross;
+    const decay = Math.exp(-dt / 0.3);
+    if (Math.abs(across) >= Math.abs(this.acrossPeak) * decay) this.acrossPeak = across; else this.acrossPeak *= decay;
+    if (!this.capsized && !this.held && this.capsizing === 0) {
+      if (this.swingPeak > 0.018 && Math.abs(this.acrossPeak) > 0.1) this.trigger += dt; else this.trigger = Math.max(0, this.trigger - dt * 2);
+      if (this.trigger > 0.05) { this.capsizing = 1e-4; this.capDir = this.acrossPeak > 0 ? -1 : 1; this.onCapsize && this.onCapsize(); }
+    }
+    if (this.held) { this.trigger = 0; this.acrossPeak = 0; }
+    if (this.capsizing > 0) {
+      this.capsizing = Math.min(1, this.capsizing + dt / 0.8);
+      const u = this.capsizing, e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2;
+      this.flip = this.capDir * Math.PI * e;
+      if (u >= 1) { this.capsized = true; this.capsizing = 0; }
+    }
+    this.roll = this.flip + this.waveRoll * (this.capsized ? 0.5 : 1);
+    this.maxRock = Math.abs(this.waveRoll);
+  }
+  matrix() { return frameMatrix([this.x, this.y + (this.capsized || this.capsizing ? 0.01 : 0), this.z], this.yaw, this.pitch, this.roll); }
+}
+
+// ---------------------------------------------------------------------------
+// Puffs: spout mist and splashes (CPU particles, drawn as soft billboards).
+// ---------------------------------------------------------------------------
+class Puffs {
+  constructor(max) { this.max = max; this.list = []; }
+  spawn(p, v, life, s0, s1, alpha, drag = 0.6, grav = 0, col = [1, 1, 1]) {
+    if (this.list.length >= this.max) this.list.shift();
+    this.list.push({ p: p.slice(), v: v.slice(), life, age: 0, s0, s1, alpha, drag, grav, col });
+  }
+  update(dt, wind) {
+    for (const q of this.list) {
+      q.age += dt;
+      const dk = Math.exp(-q.drag * dt);
+      q.v[0] = q.v[0] * dk + wind[0] * (1 - dk); q.v[2] = q.v[2] * dk + wind[1] * (1 - dk);
+      q.v[1] = q.v[1] * dk - q.grav * dt;
+      q.p[0] += q.v[0] * dt; q.p[1] += q.v[1] * dt; q.p[2] += q.v[2] * dt;
+    }
+    this.list = this.list.filter((q) => q.age < q.life);
+  }
+  pack(out, blockM) {
+    let n = 0;
+    for (const q of this.list) {
+      const t = q.age / q.life, w = M4.point(blockM, q.p), o = n * 8;
+      out[o] = w[0]; out[o + 1] = w[1]; out[o + 2] = w[2]; out[o + 3] = lerp(q.s0, q.s1, Math.sqrt(t));
+      out[o + 4] = q.col[0]; out[o + 5] = q.col[1]; out[o + 6] = q.col[2];
+      out[o + 7] = q.alpha * Math.min(1, t * 8) * (1 - t) * (1 - t);
+      n++;
+    }
+    return n;
+  }
+  splash(p, strength = 1) {
+    for (let k = 0; k < 26 * strength; k++) {
+      const a = rand() * TAU, s = randRange(0.4, 1.3) * strength;
+      this.spawn([p[0], p[1] + 0.02, p[2]], [Math.cos(a) * s * 0.6, randRange(1.0, 2.3) * strength, Math.sin(a) * s * 0.6], randRange(0.45, 0.8), 0.022, 0.05, 0.85, 0.4, 5.5);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Seal bodies
+// ---------------------------------------------------------------------------
+const SEAL_L = 0.82, SEAL_RINGS = 24, SEAL_SEG = 14;
+const SEAL_PROF = [[0, 0.012, 0.011], [0.035, 0.04, 0.036], [0.08, 0.064, 0.058], [0.14, 0.078, 0.074], [0.2, 0.073, 0.071], [0.27, 0.088, 0.085],
+  [0.38, 0.12, 0.11], [0.5, 0.133, 0.118], [0.62, 0.126, 0.11], [0.74, 0.098, 0.086], [0.85, 0.064, 0.056], [0.93, 0.04, 0.035], [1.0, 0.016, 0.014]];
+const SEAL_TONES = {
+  raft: { back: [0.34, 0.35, 0.35], belly: [0.66, 0.64, 0.6], muzzle: [0.82, 0.79, 0.72] },
+  shore: { back: [0.4, 0.37, 0.33], belly: [0.7, 0.66, 0.6], muzzle: [0.85, 0.81, 0.74] },
+};
+const SEAL_RADII = Array.from({ length: SEAL_RINGS }, (_, k) => profileAt(SEAL_PROF, k / (SEAL_RINGS - 1)));
+
+// Lying pose in the seal's own frame (x forward, y up, z right), belly on y = 0.
+function sealLocalPose(o) {
+  const pts = [], neck = 0.27, nx = (0.5 - neck) * SEAL_L;
+  for (let k = 0; k < SEAL_RINGS; k++) {
+    const s = k / (SEAL_RINGS - 1), [, ry] = SEAL_RADII[k];
+    let p = [(0.5 - s) * SEAL_L, ry * 0.95, 0];
+    p[1] += (o.tailLift || 0) * sstep(0.7, 1, s) ** 2;
+    if (s < neck) {
+      let d = [p[0] - nx, p[1] - SEAL_RADII[Math.round(neck * (SEAL_RINGS - 1))][1] * 0.95, 0];
+      const w = sstep(neck, neck * 0.4, s);
+      d = V3.rot(d, [0, 0, 1], (o.headPitch || 0) * (0.5 + 0.5 * w));
+      d = V3.rot(d, [0, 1, 0], -(o.headYaw || 0) * (0.5 + 0.5 * w));
+      p = [nx + d[0], SEAL_RADII[Math.round(neck * (SEAL_RINGS - 1))][1] * 0.95 + d[1], d[2]];
+    }
+    if (o.bend) p[2] += o.bend * Math.sin(Math.PI * s) * 0.08;
+    pts.push(p);
+  }
+  return pts;
+}
+
+function buildSeal(mb, pts, o) {
+  const tone = SEAL_TONES[o.tone || 'raft'];
+  const frames = spineFrames(pts, o.up || [0, 1, 0]);
+  const n = frames.length, breath = o.breath || 0;
+  const rings = frames.map((f, k) => {
+    const s = k / (n - 1);
+    let [rx, ry] = SEAL_RADII[k];
+    const b = 1 + breath * sstep(0.28, 0.45, s) * sstep(0.85, 0.65, s);
+    rx *= b; ry *= b;
+    let S = f.S, N = f.N;
+    if (o.roll) { S = V3.rot(S, f.T, o.roll); N = V3.rot(N, f.T, o.roll); }
+    return { c: f.p, a: S, b: N, ra: rx, rb: ry, rbNeg: ry * 0.9, t: f.T };
+  });
+  const colFn = (s, th) => {
+    const dorsal = 0.5 + 0.5 * Math.cos(th);
+    let c = V3.lerp(tone.belly, tone.back, Math.pow(dorsal, 0.8));
+    const mz = sstep(0.1, 0.05, s);
+    if (mz > 0) c = V3.lerp(c, tone.muzzle, mz * (0.55 + 0.45 * (1 - dorsal)));
+    return c;
+  };
+  loftRings(mb, rings, SEAL_SEG, colFn, 1, 0.012, 0.012);
+  const dark = [0.035, 0.035, 0.04];
+  // Eyes and nose.
+  const ke = Math.round(0.105 * (n - 1));
+  for (const side of [-1, 1]) {
+    const p = bodyPoint(rings[ke], side * 0.95, 0.94), r = rings[ke];
+    addEllipsoid(mb, p, V3.mul(r.t, 0.012), V3.mul(r.b, 0.012), V3.mul(r.a, 0.012), dark, 11, 8, 5);
+  }
+  {
+    const r = rings[0];
+    addEllipsoid(mb, V3.add(V3.madd(r.c, r.t, 0.012), V3.mul(r.b, 0.006)), V3.mul(r.t, 0.01), V3.mul(r.b, 0.009), V3.mul(r.a, 0.016), dark, 11, 8, 5);
+  }
+  // Fore flippers (articulated at the shoulder).
+  const kf = Math.round(0.36 * (n - 1)), rf = rings[kf];
+  const flipCol = V3.mul(tone.back, 0.82);
+  for (const side of [-1, 1]) {
+    const art = side < 0 ? (o.foreL || {}) : (o.foreR || {});
+    const base = bodyPoint(rf, side * 1.95, 0.95);
+    let d = V3.norm(V3.add(V3.add(V3.mul(rf.t, -0.5 + (art.reach || 0)), V3.mul(rf.a, side * 0.55)), V3.mul(rf.b, -0.65 + (art.lift || 0))));
+    d = V3.rot(d, rf.a, art.sweep || 0);
+    const th = V3.norm(V3.cross(d, rf.t)), wd = V3.norm(V3.cross(th, d));
+    addEllipsoid(mb, V3.madd(base, d, 0.052), V3.mul(d, 0.062), V3.mul(th, 0.011), V3.mul(wd, 0.03), flipCol, 0, 9, 5);
+  }
+  // Hind flippers (paired fans at the tail).
+  const rt = rings[n - 1];
+  for (const side of [-1, 1]) {
+    let d = V3.norm(V3.add(V3.add(V3.mul(rt.t, -1), V3.mul(rt.a, side * (o.hindSpread || 0.22))), V3.mul(rt.b, o.hindLift || 0.05)));
+    d = V3.rot(d, rt.b, o.hindSweep || 0);
+    const wd = V3.norm(V3.cross(rt.b, d)), th = V3.norm(V3.cross(d, wd));
+    addEllipsoid(mb, V3.madd(rt.c, d, 0.065), V3.mul(d, 0.075), V3.mul(th, 0.01), V3.mul(wd, 0.045), flipCol, 0, 9, 5);
+  }
+  return rings;
+}
+
+// Path follower used by swimming bodies: the spine is resampled from the head's own trail.
+class Trail {
+  constructor() { this.pts = []; }
+  fill(head, back, length) {
+    this.pts = [];
+    const n = Math.ceil(length / 0.04) + 2;
+    for (let k = n; k >= 1; k--) this.pts.push(V3.madd(head, back, (k * length) / n));
+  }
+  fillFrom(points) { this.pts = points.map((p) => p.slice()); }
+  push(head, keep) {
+    const last = this.pts[this.pts.length - 1];
+    if (!last || V3.len(V3.sub(head, last)) > 0.025) this.pts.push(head.slice());
+    // Trim the oldest points beyond the length we need.
+    let acc = 0;
+    for (let i = this.pts.length - 1; i > 0; i--) {
+      acc += V3.len(V3.sub(this.pts[i], this.pts[i - 1]));
+      if (acc > keep) { this.pts.splice(0, i - 1); break; }
+    }
+  }
+  // Points at arc distances (ascending) behind the head.
+  sample(head, dists) {
+    const out = [];
+    let a = head, idx = this.pts.length - 1, acc = 0, lastDir = [-1, 0, 0];
+    for (const d of dists) {
+      let placed = false;
+      while (idx >= 0) {
+        const b = this.pts[idx], l = V3.len(V3.sub(b, a));
+        if (l > 1e-6 && acc + l >= d) { out.push(V3.lerp(a, b, (d - acc) / l)); placed = true; break; }
+        if (l > 1e-6) lastDir = V3.mul(V3.sub(b, a), 1 / l);
+        acc += l; a = b; idx--;
+      }
+      if (!placed) out.push(V3.madd(a, lastDir, d - acc));
+    }
+    return out;
+  }
+}
+
+// Steering helper: choose a heading toward a goal that keeps clear of a "bad" predicate.
+function steer(pos, heading, goalHeading, bad, look, maxTurn, dt) {
+  let best = heading, bestScore = -1e9;
+  for (const off of [-1.1, -0.7, -0.4, -0.2, 0, 0.2, 0.4, 0.7, 1.1]) {
+    const h = heading + off;
+    let score = -Math.abs(wrapAngle(goalHeading - h)) * 0.5 - Math.abs(off) * 0.15;
+    for (const d of look) {
+      if (bad(pos[0] + Math.cos(h) * d, pos[2] + Math.sin(h) * d)) score -= 3 / d;
+    }
+    if (score > bestScore) { bestScore = score; best = h; }
+  }
+  const urgent = bestScore < -2 ? 1.7 : 1;
+  return heading + clamp(wrapAngle(best - heading), -maxTurn * urgent * dt, maxTurn * urgent * dt);
+}
+
+// ---------------------------------------------------------------------------
+// Raft seal: breathes and looks around on the raft; big waves tip it off
+// head-first; it swims (head up, hind-flipper strokes), then hauls back out.
+// ---------------------------------------------------------------------------
+class RaftSeal {
+  constructor(raft, sea, puffs) { this.raft = raft; this.sea = sea; this.puffs = puffs; this.trail = new Trail(); this.reset(); }
+  reset() {
+    this.state = 'raft'; this.t = 0; this.yawOnRaft = 0.15; this.balance = 0;
+    this.headYaw = 0; this.headYawT = 0; this.headPitch = 0.18; this.lookTimer = 2;
+    this.breath = 0; this.flipT = 0; this.wobble = 0; this.slipDir = 0; this.swimTime = 0;
+    this.head = [0, 0, 0]; this.heading = 0; this.speed = 0; this.stroke = 0; this.haulFrom = null; this.pts = null; this.splashed = false;
+  }
+  raftLocalMatrix(extraYaw = 0) {
+    return M4.mul(this.raft.matrix(), frameMatrix([0, 0.045, 0], this.yawOnRaft + extraYaw, 0, 0));
+  }
+  lyingPoints(time) {
+    return sealLocalPose({ headYaw: this.headYaw, headPitch: this.headPitch, tailLift: 0.035, bend: Math.sin(time * 0.7) * 0.05 + this.wobble * Math.sin(time * 17) * 0.5 });
+  }
+  edgeDistance() {
+    const a = this.yawOnRaft, hx = this.raft.len / 2, hz = this.raft.beam / 2;
+    return Math.min(hx / Math.max(Math.abs(Math.cos(a)), 1e-3), hz / Math.max(Math.abs(Math.sin(a)), 1e-3));
+  }
+  update(dt, time) {
+    const sea = this.sea, raft = this.raft;
+    this.t += dt;
+    this.breath = Math.sin(time * 1.9) * 0.035;
+    if (this.state === 'raft' || this.state === 'wobble') {
+      // Idle: look around now and then.
+      this.lookTimer -= dt;
+      if (this.lookTimer < 0) { this.headYawT = randRange(-0.7, 0.7); this.lookTimer = randRange(1.8, 4.5); }
+      this.headYaw = lerp(this.headYaw, this.headYawT, expDecay(dt, 0.5));
+      this.headPitch = lerp(this.headPitch, 0.18 + 0.12 * Math.max(0, Math.sin(time * 0.4)), expDecay(dt, 0.8));
+      this.flipT = Math.max(0, Math.sin(time * 0.53) * 1.4 - 0.8);
+      // Balance: raft tilt and sudden heave both unsettle it.
+      const tilt = Math.hypot(raft.pitch, raft.roll);
+      const push = Math.max(0, tilt - 0.022) * 130 + Math.max(0, Math.abs(raft.heaveAcc) - 1.0) * 0.6;
+      this.balance = clamp(this.balance + (push - 0.35) * dt, 0, 1.6);
+      this.wobble = lerp(this.wobble, Math.min(1, this.balance), expDecay(dt, 0.15));
+      if (this.state === 'raft' && this.balance > 0.35) { this.state = 'wobble'; this.wobbleT = 0; }
+      if (this.state === 'wobble' && this.balance < 0.1) this.state = 'raft';
+      if (this.state === 'wobble') this.wobbleT += dt;
+      if (this.state === 'wobble') {
+        // Turn the head toward the downhill side before slipping.
+        const gx = raft.slopeAlong * Math.cos(raft.yaw) - raft.slopeAcross * Math.sin(raft.yaw);
+        const gz = raft.slopeAlong * Math.sin(raft.yaw) + raft.slopeAcross * Math.cos(raft.yaw);
+        const worldDown = Math.atan2(-gz, -gx);
+        const want = wrapAngle(worldDown - raft.yaw);
+        this.yawOnRaft += clamp(wrapAngle(want - this.yawOnRaft), -2.4 * dt, 2.4 * dt);
+      }
+      if (this.state === 'wobble' && this.balance > 1 && this.wobbleT > 0.45) { this.state = 'slip'; this.t = 0; this.splashed = false; this.onSlip && this.onSlip(); }
+      this.pts = this.lyingPoints(time).map((p) => M4.point(this.raftLocalMatrix(), p));
+    } else if (this.state === 'slip') {
+      const u = Math.min(1, this.t / 1.0), edge = this.edgeDistance();
+      const slide = u * (edge - 0.05);
+      const ang = -Math.pow(Math.max(0, (u - 0.18) / 0.82), 1.4) * 1.5;
+      const pivot = [edge * 0.82, 0, 0];
+      const local = this.lyingPoints(time).map((p) => {
+        let q = [p[0] + slide, p[1], p[2]];
+        if (q[0] > pivot[0] - 0.4 || ang < -0.05) q = V3.add(pivot, V3.rot(V3.sub(q, pivot), [0, 0, 1], ang));
+        return q;
+      });
+      const M = this.raftLocalMatrix();
+      this.pts = local.map((p) => M4.point(M, p));
+      const nose = this.pts[0];
+      if (!this.splashed && nose[1] < sea.surfaceAt(nose[0], nose[2]) + 0.01) {
+        this.splashed = true;
+        this.puffs.splash(nose, 1.0);
+        this.splashPulse = 0.14;
+        this.onSplash && this.onSplash();
+      }
+      if (u >= 1) {
+        this.state = 'swim'; this.t = 0; this.swimTime = randRange(10, 15);
+        this.head = this.pts[0].slice();
+        const d = V3.sub(this.pts[0], this.pts[3]);
+        this.heading = Math.atan2(d[2], d[0]); this.speed = 0.5;
+        this.trail.fillFrom(this.pts.slice().reverse());
+        this.headYaw = 0;
+      }
+    } else if (this.state === 'swim' || this.state === 'return') {
+      if (this.state === 'swim' && this.t > this.swimTime) this.state = 'return';
+      const lvl = sea.level;
+      const bad = (x, z) => Math.abs(x) > HX - 0.45 || Math.abs(z) > HZ - 0.45 || sea.groundAtF(x, z) > lvl - 0.3;
+      let goal = this.heading + Math.sin(this.t * 0.37) * 0.8;
+      if (this.state === 'return') goal = Math.atan2(raft.z - this.head[2], raft.x - this.head[0]);
+      this.heading = steer(this.head, this.heading, goal, bad, [0.35, 0.7, 1.05], 1.6, dt);
+      this.speed = lerp(this.speed, this.state === 'return' ? 0.55 : 0.6, expDecay(dt, 0.8));
+      this.stroke += dt * (4.2 + this.speed * 2);
+      const surge = 1 + 0.25 * Math.sin(this.stroke);
+      this.head[0] += Math.cos(this.heading) * this.speed * surge * dt;
+      this.head[2] += Math.sin(this.heading) * this.speed * surge * dt;
+      const ty = sea.surfaceAt(this.head[0], this.head[2]) - 0.035;
+      this.head[1] = lerp(this.head[1], ty, expDecay(dt, 0.25));
+      this.trail.push(this.head, SEAL_L + 0.3);
+      const dists = Array.from({ length: SEAL_RINGS }, (_, k) => (k / (SEAL_RINGS - 1)) * SEAL_L);
+      const pts = this.trail.sample(this.head, dists);
+      const fr = spineFrames(pts);
+      this.pts = pts.map((p, k) => {
+        const s = k / (SEAL_RINGS - 1);
+        const up = 0.075 * Math.pow(Math.max(0, 1 - s / 0.3), 1.2);
+        const sway = 0.035 * Math.sin(this.stroke - s * 4.5) * sstep(0.5, 1, s);
+        return V3.add(V3.add(p, [0, up, 0]), V3.mul(fr[k].S, sway));
+      });
+      if (this.state === 'return') {
+        const dx = raft.x - this.head[0], dz = raft.z - this.head[2];
+        if (Math.hypot(dx, dz) < raft.len * 0.5 + 0.12) {
+          this.state = 'haul'; this.t = 0; this.haulFrom = this.pts.map((p) => p.slice());
+          this.yawOnRaft = wrapAngle(this.heading - raft.yaw);
+        }
+      }
+    } else if (this.state === 'haul') {
+      const u = Math.min(1, this.t / 1.9), e = u * u * (3 - 2 * u);
+      const target = this.lyingPoints(time).map((p) => M4.point(this.raftLocalMatrix(), p));
+      this.pts = this.haulFrom.map((p, k) => {
+        const q = V3.lerp(p, target[k], clamp(e * 1.15 - (k / SEAL_RINGS) * 0.15, 0, 1));
+        q[1] += Math.sin(Math.PI * u) * 0.07 * (1 - k / SEAL_RINGS * 0.5);
+        return q;
+      });
+      if (u >= 1) { this.state = 'raft'; this.balance = 0; this.wobble = 0; }
+    }
+  }
+  build(mb, time) {
+    if (!this.pts) return;
+    const swim = this.state === 'swim' || this.state === 'return';
+    const flail = this.wobble;
+    const sweep = swim ? -0.9 : -0.2 + this.flipT * 0.5 + flail * Math.sin(time * 14) * 0.6;
+    this.rings = buildSeal(mb, this.pts, {
+      tone: 'raft', breath: swim ? 0.01 : this.breath,
+      foreL: { sweep, lift: swim ? 0.5 : 0 }, foreR: { sweep: swim ? -0.9 : -0.2 + flail * Math.cos(time * 13) * 0.6, lift: swim ? 0.5 : 0 },
+      hindSweep: swim ? Math.sin(this.stroke) * 0.55 : Math.sin(time * 0.8) * 0.08,
+      hindSpread: swim ? 0.18 + 0.12 * Math.cos(this.stroke) : 0.2,
+    });
+  }
+  label() {
+    return { raft: 'Resting on the raft', wobble: 'Losing its balance', slip: 'Slipping in, head first', swim: 'Swimming', return: 'Swimming back to the raft', haul: 'Hauling out' }[this.state];
+  }
+}
+
+// Shore seal: breathes, gazes, scratches with a fore flipper, lifts its head at big waves.
+class ShoreSeal {
+  constructor(sea) {
+    this.sea = sea;
+    const y = groundAt(SHORE_SEAL.x, SHORE_SEAL.z);
+    this.base = frameMatrix([SHORE_SEAL.x, y - 0.012, SHORE_SEAL.z], SHORE_SEAL.heading, 0.03, 0);
+    this.reset();
+  }
+  reset() { this.headYaw = 0; this.yawT = 0.3; this.gazeTimer = 3; this.scratch = 0; this.scratchTimer = 6; this.alert = 0; this.alertHold = 0; this.headPitch = 0.3; }
+  update(dt, time) {
+    this.gazeTimer -= dt;
+    if (this.gazeTimer < 0) { this.yawT = randRange(-0.6, 0.8); this.gazeTimer = randRange(2.5, 6); }
+    this.headYaw = lerp(this.headYaw, this.yawT * (1 - this.alert * 0.7), expDecay(dt, 0.9));
+    this.scratchTimer -= dt;
+    if (this.scratchTimer < 0 && this.scratch <= 0 && this.alert < 0.2) { this.scratch = 1.8; this.scratchTimer = randRange(7, 12); }
+    if (this.scratch > 0) this.scratch -= dt;
+    const big = this.sea.maxEtaNear(SHORE_SEAL.x, SHORE_SEAL.z, 1.3);
+    if (big > 0.045) this.alertHold = 2.2;
+    this.alertHold -= dt;
+    this.alert = lerp(this.alert, this.alertHold > 0 ? 1 : 0, expDecay(dt, 0.35));
+    this.headPitch = lerp(0.28 + 0.06 * Math.sin(time * 0.3), 0.8, this.alert);
+    this.breath = Math.sin(time * 1.6 + 1) * 0.035;
+    this.time = time;
+  }
+  build(mb) {
+    const sc = this.scratch > 0 ? Math.sin(Math.min(1, this.scratch / 1.8) * Math.PI) : 0;
+    const local = sealLocalPose({ headYaw: this.headYaw + sc * 0.35, headPitch: this.headPitch + sc * 0.1, tailLift: 0.05, bend: 0.25 + sc * 0.2 });
+    const pts = local.map((p) => M4.point(this.base, p));
+    buildSeal(mb, pts, {
+      tone: 'shore', breath: this.breath,
+      foreR: { sweep: sc * (1.3 + Math.sin(this.time * 16) * 0.25), lift: sc * 0.9, reach: sc * 0.6 },
+      foreL: { sweep: -0.25 },
+      hindSpread: 0.25, hindLift: 0.12 + 0.05 * Math.sin(this.time * 0.6),
+    });
+  }
+  label() { return this.alert > 0.5 ? 'head up, watching the swell' : this.scratch > 0 ? 'scratching' : 'basking'; }
+}
+
+// ---------------------------------------------------------------------------
+// Humpback whale. The spine follows the trail its head has swum, so it always
+// moves head-first and bends through turns.
+// ---------------------------------------------------------------------------
+const WHALE_L = 2.6, WHALE_RINGS = 44, WHALE_SEG = 20;
+const WHALE_PROF = [[0, 0.05, 0.03], [0.04, 0.15, 0.085], [0.1, 0.24, 0.16], [0.2, 0.31, 0.25], [0.31, 0.335, 0.3], [0.44, 0.31, 0.285],
+  [0.57, 0.25, 0.23], [0.69, 0.165, 0.17], [0.79, 0.095, 0.125], [0.89, 0.055, 0.08], [0.96, 0.035, 0.045], [1.0, 0.02, 0.02]];
+const WHALE_RADII = Array.from({ length: WHALE_RINGS }, (_, k) => profileAt(WHALE_PROF, k / (WHALE_RINGS - 1)));
+const WHALE_DISTS = Array.from({ length: WHALE_RINGS }, (_, k) => (k / (WHALE_RINGS - 1)) * WHALE_L);
+
+class Whale {
+  constructor(sea, puffs) { this.sea = sea; this.puffs = puffs; this.trail = new Trail(); this.reset(); }
+  reset() {
+    this.head = [-2.2, -1.0, 1.4]; this.heading = -0.5; this.speed = 0.5; this.state = 'cruise'; this.t = 0;
+    this.trail.fill(this.head, [-Math.cos(this.heading), 0, -Math.sin(this.heading)], WHALE_L + 0.4);
+    this.goal = this.pickGoal(); this.phase = 0; this.spout = 0; this.pending = false; this.vy = 0; this.pts = null;
+    this.lastHead = this.head.slice(); this.backwards = 0;
+  }
+  ok(x, z, m = 0.95) { return Math.abs(x) < HX - m && Math.abs(z) < HZ - m && this.sea.groundAtF(x, z) < -1.25; }
+  pickGoal() {
+    for (let k = 0; k < 80; k++) {
+      const x = randRange(-4.2, 1.6), z = randRange(-2.6, 2.6);
+      if (this.ok(x, z, 1.1) && Math.hypot(x - this.head[0], z - this.head[2]) > 1.6) return [x, z];
+    }
+    return [-2.5, 0];
+  }
+  call() {
+    if (this.state === 'cruise') { this.state = 'rise'; this.t = 0; return true; }
+    this.pending = this.state !== 'rise' && this.state !== 'surface';
+    return false;
+  }
+  update(dt) {
+    const sea = this.sea, lvl = sea.level;
+    this.t += dt;
+    let targetY = lvl - 1.0, vmax = 0.25, speed = 0.5;
+    switch (this.state) {
+      case 'cruise': if (this.pending) { this.pending = false; this.state = 'rise'; this.t = 0; } break;
+      case 'rise': targetY = lvl - 0.24; vmax = 0.32; speed = 0.45;
+        if (this.head[1] > lvl - 0.3) { this.state = 'surface'; this.t = 0; }
+        break;
+      case 'surface': targetY = lvl - 0.22; vmax = 0.2; speed = 0.4;
+        if (this.t > 0.8 && this.spout === 0) { this.spout = 1.5; this.onBlow && this.onBlow(); }
+        if (this.t > 4.6) { this.state = 'arch'; this.t = 0; }
+        break;
+      case 'arch': targetY = lvl + 0.05; vmax = 0.5; speed = 0.42;
+        if (this.t > 0.85) { this.state = 'dive'; this.t = 0; }
+        break;
+      case 'dive': targetY = lvl - 1.08; vmax = 1.15; speed = 0.45;
+        if (this.head[1] < lvl - 0.95 && this.t > 1.2) { this.state = 'cruise'; this.t = 0; this.goal = this.pickGoal(); }
+        break;
+    }
+    // Horizontal steering: head for the goal, keep clear of shallows and glass.
+    if (Math.hypot(this.goal[0] - this.head[0], this.goal[1] - this.head[2]) < 0.9 || (this.state === 'cruise' && this.t > 14)) { this.goal = this.pickGoal(); if (this.state === 'cruise') this.t = 0; }
+    const goalH = Math.atan2(this.goal[1] - this.head[2], this.goal[0] - this.head[0]);
+    const bad = (x, z) => !this.ok(x, z, 0.85);
+    this.heading = steer(this.head, this.heading, goalH, bad, [0.7, 1.3, 1.9], 0.5, dt);
+    this.speed = lerp(this.speed, speed, expDecay(dt, 1.2));
+    const vyT = clamp((targetY - this.head[1]) * 1.6, -vmax, vmax);
+    this.vy = lerp(this.vy, vyT, expDecay(dt, this.state === 'dive' ? 0.25 : 0.6));
+    const prev = this.head.slice();
+    this.head[0] += Math.cos(this.heading) * this.speed * dt;
+    this.head[2] += Math.sin(this.heading) * this.speed * dt;
+    this.head[1] += this.vy * dt;
+    this.head[0] = clamp(this.head[0], -HX + 0.5, HX - 0.5); this.head[2] = clamp(this.head[2], -HZ + 0.5, HZ - 0.5);
+    // Head-first check (for testing): movement must agree with the heading.
+    const mv = V3.sub(this.head, prev);
+    if (mv[0] * Math.cos(this.heading) + mv[2] * Math.sin(this.heading) < -1e-6) this.backwards++;
+    this.trail.push(this.head, WHALE_L + 0.6);
+    this.phase += dt * (1.5 + this.speed * 1.2);
+    const pts = this.trail.sample(this.head, WHALE_DISTS);
+    const amp = this.state === 'dive' ? 0.025 : 0.05;
+    // Fluke-up dive: while the tail stock is still near the surface the tail
+    // bends up and lifts the flukes clear, then they roll under along the path.
+    const tailY = pts[pts.length - 1][1];
+    const lift = this.state === 'dive' ? 0.34 * sstep(lvl - 0.8, lvl - 0.3, tailY) * sstep(0, 0.6, this.t) : 0;
+    for (let k = 0; k < pts.length; k++) {
+      const s = k / (WHALE_RINGS - 1);
+      pts[k][1] += amp * Math.sin(this.phase - s * 3.2) * Math.pow(sstep(0.4, 1, s), 1.4) + lift * Math.pow(sstep(0.62, 1, s), 1.6);
+    }
+    this.pts = pts;
+    // Spout: misty column from the blowhole.
+    if (this.spout > 0) {
+      this.spout = Math.max(0, this.spout - dt);
+      if (this.blowhole && this.spout > 0.25) {
+        for (let k = 0; k < 4; k++) {
+          this.puffs.spawn(V3.add(this.blowhole, [randRange(-0.03, 0.03), 0.04, randRange(-0.03, 0.03)]),
+            [randRange(-0.22, 0.22), randRange(2.0, 2.7), randRange(-0.22, 0.22)], randRange(1.3, 2.0), 0.05, randRange(0.35, 0.55), 0.42, 1.1, 1.4, [0.97, 0.98, 1.0]);
+        }
+      }
+      if (this.spout === 0) this.spout = -1;
+    }
+    if (this.state === 'cruise' && this.spout < 0) this.spout = 0;
+  }
+  // The back heaves the water when it is near the surface.
+  pushWater(sea) {
+    if (!this.rings) return;
+    for (let k = 3; k < WHALE_RINGS - 4; k += 3) {
+      const r = this.rings[k], top = r.c[1] + r.rb;
+      const f = sstep(-0.55, 0.02, top - sea.level);
+      if (f > 0.01) sea.addBlob(r.c[0], r.c[2], -0.024 * f, 0.28 + r.ra * 0.5);
+    }
+  }
+  build(mb) {
+    if (!this.pts) return;
+    const frames = spineFrames(this.pts);
+    const rings = frames.map((f, k) => {
+      const [rx, ry] = WHALE_RADII[k];
+      const s = k / (WHALE_RINGS - 1);
+      // Flattened head, deeper keel toward the tail stock.
+      return { c: V3.add(f.p, V3.mul(f.N, -0.02 * sstep(0.25, 0.0, s))), a: f.S, b: f.N, ra: rx, rb: ry, rbNeg: ry * (s < 0.5 ? 1.05 : 1.12), t: f.T };
+    });
+    this.rings = rings;
+    loftRings(mb, rings, WHALE_SEG, () => [1, 1, 1], 2, 0.03, 0.015);
+    const dark = [0.07, 0.075, 0.09], knobCol = [0.1, 0.105, 0.12];
+    const R = (s) => rings[Math.round(s * (WHALE_RINGS - 1))];
+    // Knobbly rostrum and jaw: tubercles.
+    for (const s of [0.025, 0.055, 0.085, 0.115, 0.145]) {
+      for (const th of [0, -0.42, 0.42]) {
+        if (th !== 0 && s < 0.05) continue;
+        const r = R(s), p = bodyPoint(r, th, 1.0);
+        addEllipsoid(mb, p, V3.mul(r.t, 0.02), V3.mul(r.b, 0.012), V3.mul(r.a, 0.019), knobCol, 0, 7, 4);
+      }
+    }
+    for (const s of [0.035, 0.075, 0.115]) for (const side of [-1, 1]) {
+      const r = R(s), p = bodyPoint(r, side * 1.7, 1.0);
+      addEllipsoid(mb, p, V3.mul(r.t, 0.017), V3.mul(r.b, 0.014), V3.mul(r.a, 0.012), knobCol, 0, 7, 4);
+    }
+    // Eyes near the corner of the mouth.
+    for (const side of [-1, 1]) {
+      const r = R(0.19), p = bodyPoint(r, side * 1.78, 0.985);
+      addEllipsoid(mb, p, V3.mul(r.t, 0.02), V3.mul(r.b, 0.014), V3.mul(r.a, 0.012), [0.02, 0.02, 0.025], 11, 8, 5);
+    }
+    // Small dorsal fin on a low hump.
+    {
+      const r = R(0.66), p = V3.add(bodyPoint(r, 0, 0.98), V3.mul(r.t, -0.02));
+      addEllipsoid(mb, p, V3.add(V3.mul(r.t, 0.075), V3.mul(r.b, -0.02)), V3.add(V3.mul(r.b, 0.055), V3.mul(r.t, -0.025)), V3.mul(r.a, 0.016), dark, 0, 9, 5);
+    }
+    // Very long pale flippers with a scalloped leading edge.
+    const rf = R(0.27), FL = 0.86;
+    for (const side of [-1, 1]) {
+      const base = bodyPoint(rf, side * 1.85, 0.9);
+      let d = V3.norm(V3.add(V3.add(V3.mul(rf.t, -0.5), V3.mul(rf.a, side * 0.8)), V3.mul(rf.b, -0.24)));
+      d = V3.rot(d, rf.t, side * 0.16 * Math.sin(this.phase * 0.45));
+      const chord = V3.norm(V3.sub(rf.t, V3.mul(d, V3.dot(rf.t, d))));
+      const thick = V3.norm(V3.cross(d, chord));
+      const fr = [];
+      for (let k = 0; k <= 10; k++) {
+        const u = k / 10;
+        const c = V3.add(V3.add(base, V3.mul(d, u * FL)), V3.mul(rf.t, -0.1 * u * u));
+        const scallop = 0.011 * Math.max(0, Math.sin(u * Math.PI * 6.5)) * (1 - u * 0.5);
+        fr.push({ c: V3.madd(c, chord, scallop), a: chord, b: thick, ra: 0.085 * Math.pow(1 - u, 0.55) + 0.022, rb: 0.022 * (1 - u) + 0.006, t: d });
+      }
+      loftRings(mb, fr, 10, (s, th) => (Math.cos(th) * side > 0 ? [0.62, 0.64, 0.66] : [0.88, 0.89, 0.89]), 0, 0, 0.012);
+    }
+    // Wide flukes: dark above, pale below, serrated trailing edge.
+    const rt = rings[WHALE_RINGS - 1], span = 0.43;
+    const T = rt.t, S = rt.a, N = rt.b, root = rt.c;
+    for (const side of [-1, 1]) {
+      const top = [], bot = [];
+      for (let k = 0; k <= 9; k++) {
+        const b = (k / 9) * span, u = b / span;
+        const le = 0.02 + 0.16 * u * u;
+        const te = lerp(0.12, 0.18, Math.pow(u, 1.5)) + 0.01 * Math.sin(u * 40) * (1 - u) - 0.03 * (1 - u) * (1 - u);
+        const th = 0.018 * (1 - u * u) + 0.004;
+        const pl = V3.add(V3.add(root, V3.mul(S, side * b)), V3.mul(T, -le));
+        const pt = V3.add(V3.add(root, V3.mul(S, side * b)), V3.mul(T, -te));
+        top.push([V3.madd(pl, N, th * 0.6), V3.madd(pt, N, th * 0.3)]);
+        bot.push([V3.madd(pl, N, -th * 0.6), V3.madd(pt, N, -th * 0.3)]);
+      }
+      const emit = (rows, n, col) => {
+        const b0 = mb.nv;
+        for (const [a, c] of rows) { mb.vert(a, n, col, 0, 0, 0); mb.vert(c, n, col, 0, 0, 0); }
+        for (let k = 0; k < rows.length - 1; k++) { const a = b0 + k * 2; mb.quad(a, a + 1, a + 3, a + 2); }
+      };
+      emit(top, N, dark);
+      emit(bot, V3.mul(N, -1), [0.8, 0.8, 0.79]);
+    }
+    const bh = R(0.17);
+    this.blowhole = bodyPoint(bh, 0, 1.0);
+  }
+  label() {
+    const depth = Math.max(0, this.sea.level - this.head[1]);
+    switch (this.state) {
+      case 'rise': return 'Coming up';
+      case 'surface': return this.spout > 0 ? 'Blowing at the surface' : 'At the surface';
+      case 'arch': return 'Arching its back';
+      case 'dive': return 'Diving, flukes up';
+      default: return `Cruising · ${depth.toFixed(1)} m down`;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Props: raft and ice floes.
+// ---------------------------------------------------------------------------
+function buildRaft(mb, M) {
+  const start = mb.nv, wood = [0.52, 0.38, 0.26], dark = [0.32, 0.23, 0.16];
+  for (let k = 0; k < 5; k++) {
+    const z = -0.28 + k * 0.14, shade = 0.92 + 0.08 * Math.sin(k * 2.3);
+    addBox(mb, [0, -0.025, z], [0.5, 0, 0], [0, 0.025, 0], [0, 0, 0.064], V3.mul(wood, shade), 4);
+  }
+  for (const x of [-0.36, 0.36]) addBox(mb, [x, -0.07, 0], [0.04, 0, 0], [0, 0.022, 0], [0, 0, 0.34], dark, 4);
+  for (const x of [-0.36, 0.36]) for (const z of [-0.28, 0.28]) addBox(mb, [x, -0.005, z], [0.045, 0, 0], [0, 0.008, 0], [0, 0, 0.012], [0.7, 0.66, 0.55], 0);
+  mb.xform(start, M);
+}
+function buildKayak(mb, M) {
+  const start = mb.nv, n = 18, rings = [];
+  for (let k = 0; k < n; k++) {
+    const u = k / (n - 1), x = (0.5 - u) * 1.0, w = Math.pow(Math.sin(Math.PI * clamp(u, 0.02, 0.98)), 0.7);
+    rings.push({ c: [x, 0.01 + 0.012 * Math.pow(Math.abs(u - 0.5) * 2, 3), 0], a: [0, 0, 1], b: [0, 1, 0], ra: 0.085 * w + 0.002, rb: 0.03 * w + 0.004, rbNeg: 0.05 * w + 0.004, t: [1, 0, 0] });
+  }
+  loftRings(mb, rings, 14, (s, th) => {
+    const sheer = Math.abs(Math.abs(th) - Math.PI / 2) < 0.22;
+    if (sheer) return [0.88, 0.84, 0.74];
+    return Math.cos(th) > 0 ? [0.66, 0.2, 0.12] : [0.48, 0.15, 0.1];
+  }, 10, 0.004, 0.004);
+  addEllipsoid(mb, [0.02, 0.036, 0], [0.16, 0, 0], [0, 0.012, 0], [0, 0, 0.052], [0.05, 0.05, 0.06], 0, 12, 4);
+  addEllipsoid(mb, [0.02, 0.04, 0], [0.175, 0, 0], [0, 0.006, 0], [0, 0, 0.062], [0.16, 0.16, 0.17], 0, 12, 4);
+  // Paddle across the deck.
+  const pd = V3.norm([0.25, 0, 1]);
+  addBox(mb, [0.06, 0.05, 0], V3.mul(pd, 0.36), [0, 0.006, 0], V3.mul(V3.cross(pd, [0, 1, 0]), 0.006), [0.75, 0.62, 0.42], 4);
+  for (const s of [-1, 1]) addBox(mb, V3.add([0.06, 0.05, 0], V3.mul(pd, s * 0.4)), V3.mul(pd, 0.07), [0, 0.004, 0], V3.mul(V3.cross(pd, [0, 1, 0]), 0.03), [0.85, 0.72, 0.3], 0);
+  mb.xform(start, M);
+}
+function buildFloe(mb, M, shape) {
+  const start = mb.nv, n = shape.length, top = 0.022, bot = -0.05;
+  const c0 = mb.vert([0, top, 0], [0, 1, 0], [0.94, 0.96, 0.98], 0, 0, 3);
+  for (let k = 0; k <= n; k++) { const [x, z] = shape[k % n]; mb.vert([x, top, z], [0, 1, 0], [0.94, 0.96, 0.98], 0, 0, 3); }
+  for (let k = 0; k < n; k++) mb.tri(c0, c0 + 1 + k, c0 + 2 + k);
+  const sb = mb.nv;
+  for (let k = 0; k <= n; k++) {
+    const [x, z] = shape[k % n], [x2, z2] = shape[(k + 1) % n], [x0, z0] = shape[(k - 1 + n) % n];
+    const nn = V3.norm([z2 - z0, 0, -(x2 - x0)]);
+    const o = V3.dot(nn, [x, 0, z]) < 0 ? V3.mul(nn, -1) : nn;
+    mb.vert([x, top, z], o, [0.72, 0.84, 0.9], 0, 0, 12);
+    mb.vert([x * 0.92, bot, z * 0.92], o, [0.5, 0.68, 0.78], 0, 1, 12);
+  }
+  for (let k = 0; k < n; k++) { const a = sb + k * 2; mb.quad(a, a + 1, a + 3, a + 2); }
+  mb.xform(start, M);
+}
+function floeShape(seed, r) {
+  rngState = seed;
+  const n = 9, pts = [];
+  for (let k = 0; k < n; k++) { const a = (k / n) * TAU + randRange(-0.2, 0.2), rr = r * randRange(0.72, 1.08); pts.push([Math.cos(a) * rr, Math.sin(a) * rr]); }
+  return pts;
+}
+// ============================================================================
+// App: weather, camera, input, the frame loop, UI and readouts.
+// ============================================================================
+const norm3 = (x, y, z) => V3.norm([x, y, z]);
+const MODES = {
+  day: { sunDir: norm3(-0.42, 0.84, 0.36), sunI: 2.8, sunCol: [1.0, 0.96, 0.9], shadow: 1.0, sky: [0.62, 0.72, 0.86], skyI: 0.55, gnd: [0.56, 0.53, 0.49],
+    backTop: [0.935, 0.925, 0.905], backBot: [0.8, 0.795, 0.78], night: 0, exposure: 0.95, lamp: 0, door: 0, snow: 0, fog: [0.018, 0.04, 0.078], caustic: 1.0, ripple: 0.0012, emit: 0.04 },
+  snow: { sunDir: norm3(-0.25, 0.93, 0.27), sunI: 1.0, sunCol: [0.86, 0.9, 1.0], shadow: 0.55, sky: [0.78, 0.82, 0.88], skyI: 1.0, gnd: [0.62, 0.64, 0.67],
+    backTop: [0.8, 0.83, 0.86], backBot: [0.64, 0.68, 0.72], night: 0, exposure: 1.05, lamp: 0.25, door: 0.2, snow: 1, fog: [0.024, 0.045, 0.075], caustic: 0.35, ripple: 0.0016, emit: 0.9 },
+  aurora: { sunDir: norm3(0.38, 0.72, -0.5), sunI: 0.38, sunCol: [0.55, 0.65, 0.95], shadow: 0.8, sky: [0.09, 0.13, 0.24], skyI: 0.42, gnd: [0.05, 0.06, 0.08],
+    backTop: [0.008, 0.012, 0.03], backBot: [0.03, 0.045, 0.08], night: 1, exposure: 1.55, lamp: 1.0, door: 1.0, snow: 0, fog: [0.006, 0.016, 0.036], caustic: 0.25, ripple: 0.0012, emit: 5.0 },
+};
+const MODE_NAMES = { day: 'Daylight', snow: 'Snowfall', aurora: 'Aurora night' };
+
+class Weather {
+  constructor() {
+    this.mode = 'day'; this.blizzard = false; this.p = this.targetParams(); this.t = 0;
+    this.windOff = [0, 0]; this.fall = 0; this.wind = [0, 0]; this.gust = 0; this.chop = [];
+  }
+  targetParams() {
+    const m = MODES[this.mode], b = this.blizzard;
+    const p = JSON.parse(JSON.stringify(m));
+    if (b) {
+      p.snow = 1; p.sunI *= 0.45; p.skyI *= 1.12; p.shadow *= 0.55; p.ripple += 0.0018; p.caustic *= 0.45;
+      if (this.mode === 'day') { p.backTop = V3.lerp(p.backTop, [0.84, 0.86, 0.88], 0.6); p.backBot = V3.lerp(p.backBot, [0.7, 0.73, 0.76], 0.6); p.sky = V3.lerp(p.sky, [0.8, 0.83, 0.87], 0.6); }
+    }
+    p.blizzard = b ? 1 : 0;
+    return p;
+  }
+  update(dt, sea, live) {
+    const tgt = this.targetParams(), k = expDecay(dt, 0.8);
+    for (const key in tgt) {
+      if (Array.isArray(tgt[key])) this.p[key] = this.p[key].map((v, i) => lerp(v, tgt[key][i], k));
+      else this.p[key] = lerp(this.p[key], tgt[key], k);
+    }
+    this.p.sunDir = V3.norm(this.p.sunDir);
+    if (!live) return;
+    this.t += dt;
+    const t = this.t, bz = this.p.blizzard;
+    this.gust = bz * (0.55 + 0.45 * Math.sin(t * 0.9) * Math.sin(t * 0.37 + 2.0));
+    this.wind = [2.8 * this.gust + 0.15, 0.9 * this.gust];
+    this.windOff[0] += this.wind[0] * dt * (0.4 + bz); this.windOff[1] += this.wind[1] * dt * (0.4 + bz);
+    this.fall += dt * (0.55 + bz * 1.0);
+    // Blizzard chop: short-lived pressure gusts across the sea.
+    if (bz > 0.05) {
+      const rate = 34 * bz;
+      let n = Math.floor(rate * dt + rand());
+      while (n-- > 0) this.chop.push({ x: randRange(-HX + 0.2, HX - 0.2), z: randRange(-HZ + 0.2, HZ - 0.2), a: (rand() < 0.5 ? -1 : 1) * randRange(0.012, 0.03) * (0.4 + this.gust), life: randRange(0.3, 0.55), age: 0 });
+    }
+    for (const c of this.chop) { c.age += dt; c.x += this.wind[0] * 0.25 * dt; }
+    this.chop = this.chop.filter((c) => c.age < c.life);
+  }
+  applyChop(sea) { for (const c of this.chop) sea.addBlob(c.x, c.z, c.a * Math.sin(Math.PI * c.age / c.life), 0.13); }
+  snowCount() { return this.p.snow > 0.01 ? Math.round(lerp(4200, 9000, this.p.blizzard)) : 0; }
+}
+
+// ---------------------------------------------------------------------------
+const canvas = document.getElementById('stage');
+const $ = (id) => document.getElementById(id);
+let renderer = null;
+
+const sea = new Sea();
+const block = new Block();
+const pokes = new Pokes();
+const puffs = new Puffs(600);
+const kayak = new Kayak();
+const raft = new Floater({ x: -1.35, z: 1.25, yaw: -0.3, len: 1.0, beam: 0.7, radius: 0.5, ride: 0.05, press: 0.03, mass: 1.6 });
+const floes = [
+  new Floater({ x: -3.8, z: -2.4, yaw: 0.4, len: 0.6, beam: 0.6, radius: 0.32, ride: 0.0, press: 0.012, mass: 0.7 }),
+  new Floater({ x: 0.6, z: 0.4, yaw: 1.2, len: 0.5, beam: 0.5, radius: 0.27, ride: 0.0, press: 0.01, mass: 0.6 }),
+  new Floater({ x: -4.1, z: 2.6, yaw: 2.0, len: 0.44, beam: 0.44, radius: 0.24, ride: 0.0, press: 0.01, mass: 0.5 }),
+  new Floater({ x: 1.0, z: -2.8, yaw: 0.9, len: 0.55, beam: 0.55, radius: 0.29, ride: 0.0, press: 0.012, mass: 0.6 }),
+];
+floes.forEach((f, i) => { f.shape = floeShape(31 + i * 7, f.radius * 1.05); });
+const floaters = [kayak, raft, ...floes];
+const raftSeal = new RaftSeal(raft, sea, puffs);
+const shoreSeal = new ShoreSeal(sea);
+const whale = new Whale(sea, puffs);
+const weather = new Weather();
+const plunger = { active: false, x: 0, z: 0, tx: 0, tz: 0, amp: 0 };
+let paused = false, simTime = 0, simAcc = 0, glassBulge = null;
+
+kayak.onCapsize = () => { puffs.splash([kayak.x, kayak.y, kayak.z], 0.7); };
+
+function resetAll() {
+  sea.tiltX = sea.tiltZ = 0; sea.clearPressure();
+  sea.reset(sea.levelTarget);
+  block.reset(); pokes.list = [];
+  kayak.resetKayak(); raft.resetHome(); floes.forEach((f) => f.resetHome());
+  for (const f of floaters) { f.y = sea.surfaceAt(f.x, f.z) + f.ride; }
+  raftSeal.reset(); shoreSeal.reset();
+  raftSeal.update(0, simTime); shoreSeal.update(0, simTime);
+  plunger.active = false; plunger.amp = 0;
+  puffs.list = [];
+  if (drag && drag.kind !== 'orbit' && drag.kind !== 'pinch') endDrag();
+}
+
+// ---------------------------------------------------------------------------
+// Camera
+// ---------------------------------------------------------------------------
+const CAMERAS = [
+  { name: 'Hero', yaw: -0.62, pitch: 0.43, dist: 16.5 },
+  { name: 'Overhead', yaw: -0.04, pitch: 1.3, dist: 15.5 },
+  { name: 'Waterline', yaw: -0.3, pitch: 0.025, dist: 13.0 },
+  { name: 'Side', yaw: -1.5, pitch: 0.2, dist: 15.5 },
+];
+const cam = { yaw: CAMERAS[0].yaw, pitch: CAMERAS[0].pitch, dist: CAMERAS[0].dist, target: [0, -0.55, 0], fov: (30 * Math.PI) / 180, preset: 0, tween: null };
+let view = {};
+
+function updateCamera(dt) {
+  if (cam.tween) {
+    const tw = cam.tween;
+    tw.t = Math.min(1, tw.t + dt / 1.1);
+    const e = tw.t < 0.5 ? 4 * tw.t ** 3 : 1 - (-2 * tw.t + 2) ** 3 / 2;
+    cam.yaw = tw.from.yaw + wrapAngle(tw.to.yaw - tw.from.yaw) * e;
+    cam.pitch = lerp(tw.from.pitch, tw.to.pitch, e);
+    cam.dist = lerp(tw.from.dist, tw.to.dist, e);
+    if (tw.t >= 1) cam.tween = null;
+  }
+  const cssW = canvas.clientWidth || window.innerWidth, cssH = canvas.clientHeight || window.innerHeight;
+  const aspect = cssW / cssH, mobile = cssW < 760;
+  // On desktop, frame the diorama in the space left of the control panel.
+  const panelW = mobile ? 0 : 330, availW = cssW - panelW;
+  const fit = clamp(1.45 / (availW / cssH), 1.12, mobile ? 3.5 : 2.9);
+  let zoomOut = 1;
+  if (mobile && frameBand.bottom > frameBand.top) zoomOut = clamp((cssH * 0.45) / (frameBand.bottom - frameBand.top), 1, 2.2);
+  const dist = cam.dist * fit * zoomOut;
+  const cp = Math.cos(cam.pitch), eye = [cam.target[0] + dist * cp * Math.sin(cam.yaw), cam.target[1] + dist * Math.sin(cam.pitch), cam.target[2] + dist * cp * Math.cos(cam.yaw)];
+  const up = Math.abs(cam.pitch) > 1.45 ? [0, 0, -1] : [0, 1, 0];
+  const V = M4.lookAt(eye, cam.target, up);
+  // On phones, centre the diorama in the free band between the masthead and the
+  // readouts (or the open controls sheet), zooming out to fit when the band is short.
+  let shiftY = -0.06;
+  if (mobile && frameBand.bottom > frameBand.top) shiftY = 1 - (frameBand.top + frameBand.bottom) / cssH;
+  const P = M4.perspective(cam.fov, aspect, 0.1, 220, mobile ? 0 : -0.62 * panelW / cssW, shiftY);
+  const VP = M4.mul(P, V);
+  view = { eye, V, P, VP, inv: M4.invert(VP), cssW, cssH, right: [V[0], V[4], V[8]], up: [V[1], V[5], V[9]] };
+}
+
+// Free vertical band for the diorama on phones (between masthead and readouts/sheet).
+const frameBand = { top: 0, bottom: 0 };
+function measureBand() {
+  const h = window.innerHeight;
+  if (window.innerWidth >= 760) { frameBand.top = frameBand.bottom = 0; return; }
+  const open = $('panel').dataset.open === 'true';
+  document.body.classList.toggle('sheet-open', open);
+  const mast = document.querySelector('.masthead').getBoundingClientRect();
+  const below = (open ? $('panel') : document.querySelector('.readouts')).getBoundingClientRect().top;
+  frameBand.top = mast.bottom + 8; frameBand.bottom = Math.min(h, below) - 8;
+}
+window.addEventListener('resize', measureBand);
+
+function screenRay(x, y) {
+  const nx = (2 * x) / view.cssW - 1, ny = 1 - (2 * y) / view.cssH;
+  const p0 = unproject(nx, ny, 0), p1 = unproject(nx, ny, 1);
+  return { o: p0, d: V3.norm(V3.sub(p1, p0)) };
+}
+function unproject(nx, ny, z) {
+  const m = view.inv;
+  const x = m[0] * nx + m[4] * ny + m[8] * z + m[12], y = m[1] * nx + m[5] * ny + m[9] * z + m[13];
+  const zz = m[2] * nx + m[6] * ny + m[10] * z + m[14], w = m[3] * nx + m[7] * ny + m[11] * z + m[15];
+  return [x / w, y / w, zz / w];
+}
+function toScreen(world) {
+  const p = M4.project(view.VP, world);
+  return [(p[0] * 0.5 + 0.5) * view.cssW, (0.5 - p[1] * 0.5) * view.cssH];
+}
+
+function rayBox(o, d, mn, mx) {
+  let t0 = -Infinity, t1 = Infinity, axis = -1, sign = 0;
+  for (let a = 0; a < 3; a++) {
+    if (Math.abs(d[a]) < 1e-9) { if (o[a] < mn[a] || o[a] > mx[a]) return null; continue; }
+    let ta = (mn[a] - o[a]) / d[a], tb = (mx[a] - o[a]) / d[a], sg = -1;
+    if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; sg = 1; }
+    if (ta > t0) { t0 = ta; axis = a; sign = sg; }
+    t1 = Math.min(t1, tb);
+  }
+  if (t0 > t1 || t1 < 0 || t0 < 0) return null;
+  return { t: t0, axis, sign };
+}
+function rayEllipsoid(o, d, axes) {
+  const oo = [o[0] / axes[0], o[1] / axes[1], o[2] / axes[2]], dd = [d[0] / axes[0], d[1] / axes[1], d[2] / axes[2]];
+  const a = V3.dot(dd, dd), b = 2 * V3.dot(oo, dd), c = V3.dot(oo, oo) - 1, disc = b * b - 4 * a * c;
+  if (disc < 0) return null;
+  const t = (-b - Math.sqrt(disc)) / (2 * a);
+  return t > 0 ? t : null;
+}
+function waterHit(oT, dT) {
+  if (Math.abs(dT[1]) < 1e-6) return null;
+  let t = (sea.level - oT[1]) / dT[1];
+  if (t < 0) return null;
+  // Refine against the live surface.
+  for (let k = 0; k < 3; k++) {
+    const p = V3.madd(oT, dT, t);
+    if (Math.abs(p[0]) > HX || Math.abs(p[2]) > HZ) break;
+    t = (sea.surfaceAt(p[0], p[2]) - oT[1]) / dT[1];
+  }
+  const p = V3.madd(oT, dT, t);
+  if (Math.abs(p[0]) > HX - 0.02 || Math.abs(p[2]) > HZ - 0.02) return null;
+  return { t, p, wet: sea.depthAt(p[0], p[2]) > 0.03 };
+}
+
+// Hit test: kayak, glass side, water, jelly — whichever is nearest.
+function pick(x, y) {
+  const r = screenRay(x, y);
+  const oT = M4.point(block.inv, r.o), dT = V3.norm(M4.dir(block.inv, r.d));
+  const hits = [];
+  {
+    const Mi = M4.invert(kayak.matrix());
+    const ko = M4.point(Mi, oT), kd = M4.dir(Mi, dT);
+    const t = rayEllipsoid(ko, kd, [0.58, 0.14, 0.17]);
+    if (t !== null) hits.push({ kind: 'kayak', t });
+  }
+  const gb = rayBox(oT, dT, [-HX - GLASS_T, BLOCK_BOTTOM, -HZ - GLASS_T], [HX + GLASS_T, RIM, HZ + GLASS_T]);
+  if (gb && gb.axis !== 1) {
+    const n = [0, 0, 0]; n[gb.axis] = gb.sign;
+    hits.push({ kind: 'glass', t: gb.t, p: V3.madd(oT, dT, gb.t), n });
+  }
+  if (gb && gb.axis === 1 && gb.sign > 0) {
+    const w = waterHit(oT, dT);
+    if (w) hits.push({ kind: w.wet ? 'water' : 'land', t: w.t, p: w.p });
+  }
+  const jb = rayBox(r.o, r.d, [-JELLY_HX - 0.06, JELLY_BOTTOM, -JELLY_HZ - 0.06], [JELLY_HX + 0.06, JELLY_TOP + 0.02, JELLY_HZ + 0.06]);
+  if (jb) hits.push({ kind: 'jelly', t: jb.t, p: V3.madd(r.o, r.d, jb.t), n: (() => { const n = [0, 0, 0]; n[jb.axis] = jb.sign; return n; })() });
+  hits.sort((a, b) => a.t - b.t);
+  return { ray: r, oT, dT, hit: hits[0] || null };
+}
+
+// ---------------------------------------------------------------------------
+// Input
+// ---------------------------------------------------------------------------
+const pointers = new Map();
+let drag = null, lastTap = { t: 0, x: 0, y: 0 };
+
+function localXY(e) { const b = canvas.getBoundingClientRect(); return [e.clientX - b.left, e.clientY - b.top]; }
+
+function beginDrag(x, y, e) {
+  const pk = pick(x, y), h = pk.hit;
+  const orbit = !h || h.kind === 'land' || e.button === 2;
+  if (orbit) { drag = { kind: 'orbit', x, y }; cam.tween = null; return; }
+  if (h.kind === 'kayak') {
+    kayak.held = true; kayak.dragTarget = [kayak.x, kayak.z];
+    drag = { kind: 'kayak', x, y };
+  } else if (h.kind === 'water') {
+    plunger.active = true; plunger.x = plunger.tx = h.p[0]; plunger.z = plunger.tz = h.p[2];
+    drag = { kind: 'plunger', x, y };
+  } else if (h.kind === 'glass') {
+    const gw = M4.point(block.matrix, h.p);
+    const nW = M4.dir(block.matrix, h.n);
+    const anchor = [clamp(gw[0], -JELLY_HX, JELLY_HX), JELLY_TOP - 0.12, clamp(gw[2], -JELLY_HZ, JELLY_HZ)];
+    if (Math.abs(h.n[0]) > 0.5) anchor[0] = Math.sign(h.n[0]) * JELLY_HX; else anchor[2] = Math.sign(h.n[2]) * JELLY_HZ;
+    const poke = pokes.add(anchor, 1.0);
+    drag = { kind: 'glass', x, y, x0: x, y0: y, g: gw, n: h.n, nW, poke, tankP: h.p, dist: V3.len(V3.sub(gw, view.eye)) };
+    block.held = true;
+  } else if (h.kind === 'jelly') {
+    const poke = pokes.add(h.p, 0.85);
+    drag = { kind: 'jelly', x, y, p: h.p, poke, n: h.n };
+  }
+}
+function moveDrag(x, y) {
+  if (!drag) return;
+  if (drag.kind === 'orbit') {
+    cam.yaw -= (x - drag.x) * 0.0062; cam.pitch = clamp(cam.pitch + (y - drag.y) * 0.005, -0.14, 1.48);
+    drag.x = x; drag.y = y; return;
+  }
+  const r = screenRay(x, y);
+  const oT = M4.point(block.inv, r.o), dT = V3.norm(M4.dir(block.inv, r.d));
+  if (drag.kind === 'plunger' || drag.kind === 'kayak') {
+    if (Math.abs(dT[1]) < 1e-6) return;
+    const t = (sea.level - oT[1]) / dT[1];
+    if (t < 0) return;
+    const p = V3.madd(oT, dT, t);
+    if (drag.kind === 'plunger') { plunger.tx = clamp(p[0], -HX + 0.05, HX - 0.05); plunger.tz = clamp(p[2], -HZ + 0.05, HZ - 0.05); }
+    else kayak.dragTarget = [p[0], p[2]];
+  } else if (drag.kind === 'glass') {
+    // Horizontal hand motion slides and leans the block; vertical lifts the grabbed side.
+    let D = [0, 0];
+    if (Math.abs(r.d[1]) > 1e-4) {
+      const t = (drag.g[1] - r.o[1]) / r.d[1];
+      if (t > 0) { const p = V3.madd(r.o, r.d, t); D = [clamp(p[0] - drag.g[0], -2.5, 2.5), clamp(p[2] - drag.g[2], -2.5, 2.5)]; }
+    }
+    const lift = ((drag.y0 - y) / view.cssH) * drag.dist * 0.9;
+    const la = clamp(lift * 0.16, -0.1, 0.1);
+    block.t.ox = clamp(D[0] * 0.3, -0.6, 0.6); block.t.oz = clamp(D[1] * 0.3, -0.6, 0.6);
+    block.t.rz = clamp(la * drag.n[0] - clamp(D[0] * 0.05, -0.05, 0.05), -0.085, 0.085);
+    block.t.rx = clamp(-la * drag.n[2] + clamp(D[1] * 0.05, -0.05, 0.05), -0.1, 0.1);
+    // A soft bulge in the jelly follows the hand along the side.
+    const along = Math.abs(drag.n[0]) > 0.5 ? [drag.poke.a[0], clamp(drag.g[2] + D[1], -JELLY_HZ, JELLY_HZ)] : [clamp(drag.g[0] + D[0], -JELLY_HX, JELLY_HX), drag.poke.a[2]];
+    drag.poke.a[0] = Math.abs(drag.n[0]) > 0.5 ? drag.poke.a[0] : along[0];
+    drag.poke.a[2] = Math.abs(drag.n[0]) > 0.5 ? along[1] : drag.poke.a[2];
+    drag.poke.target = [drag.nW[0] * 0.13 + D[0] * 0.05, -0.04 + lift * 0.03, drag.nW[2] * 0.13 + D[1] * 0.05];
+    drag.hand = [clamp(drag.tankP[0] + D[0], -HX + 0.1, HX - 0.1), clamp(drag.tankP[2] + D[1], -HZ + 0.1, HZ - 0.1)];
+  } else if (drag.kind === 'jelly') {
+    // Stretch toward the hand in the plane facing the camera.
+    const n = V3.mul(V3.norm(V3.sub(view.eye, drag.p)), 1);
+    const den = V3.dot(r.d, n);
+    if (Math.abs(den) < 1e-5) return;
+    const t = V3.dot(V3.sub(drag.p, r.o), n) / den;
+    const q = V3.madd(r.o, r.d, t);
+    let d = V3.sub(q, drag.p);
+    const l = V3.len(d);
+    if (l > 0.75) d = V3.mul(d, 0.75 / l);
+    drag.poke.target = d;
+  }
+}
+function endDrag() {
+  if (!drag) return;
+  if (drag.kind === 'plunger') plunger.active = false;
+  if (drag.kind === 'kayak') { kayak.held = false; kayak.dragTarget = null; }
+  if (drag.kind === 'glass') { block.held = false; drag.poke.held = false; }
+  if (drag.kind === 'jelly') drag.poke.held = false;
+  drag = null;
+  canvas.classList.remove('is-dragging');
+}
+
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('pointerdown', (e) => {
+  if (!renderer) return;
+  canvas.setPointerCapture(e.pointerId);
+  const [x, y] = localXY(e);
+  pointers.set(e.pointerId, { x, y, t0: performance.now(), x0: x, y0: y, type: e.pointerType });
+  if (pointers.size === 2) {
+    endDrag();
+    const [a, b] = [...pointers.values()];
+    drag = { kind: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y), dist0: cam.dist };
+    cam.tween = null;
+    return;
+  }
+  if (pointers.size > 2) return;
+  beginDrag(x, y, e);
+  canvas.classList.add('is-dragging');
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!renderer) return;
+  const [x, y] = localXY(e);
+  const p = pointers.get(e.pointerId);
+  if (p) { p.x = x; p.y = y; }
+  if (drag && drag.kind === 'pinch') {
+    if (pointers.size >= 2) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      cam.dist = clamp(drag.dist0 * drag.d0 / Math.max(d, 10), 7, 34);
+    }
+    return;
+  }
+  if (drag) { moveDrag(x, y); return; }
+  // Hover only changes the cursor; it never makes waves.
+  if (e.pointerType === 'mouse') {
+    const h = pick(x, y).hit;
+    canvas.classList.toggle('can-press', !!h && h.kind === 'water');
+    canvas.classList.toggle('can-grab', !!h && (h.kind === 'kayak' || h.kind === 'glass' || h.kind === 'jelly'));
+  }
+});
+const pointerEnd = (e) => {
+  const p = pointers.get(e.pointerId);
+  pointers.delete(e.pointerId);
+  if (drag && drag.kind === 'pinch') { if (pointers.size < 2) drag = null; return; }
+  endDrag();
+  if (p && p.type !== 'mouse' && e.type === 'pointerup') {
+    const now = performance.now(), quick = now - p.t0 < 300 && Math.hypot(p.x - p.x0, p.y - p.y0) < 14;
+    if (quick) {
+      if (now - lastTap.t < 360 && Math.hypot(p.x - lastTap.x, p.y - lastTap.y) < 40) { callWhale(); lastTap.t = 0; }
+      else lastTap = { t: now, x: p.x, y: p.y };
+    }
+  }
+};
+canvas.addEventListener('pointerup', pointerEnd);
+canvas.addEventListener('pointercancel', pointerEnd);
+canvas.addEventListener('dblclick', (e) => { e.preventDefault(); callWhale(); });
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  cam.dist = clamp(cam.dist * Math.exp(e.deltaY * 0.0011), 7, 34);
+  cam.tween = null;
+}, { passive: false });
+
+// ---------------------------------------------------------------------------
+// Simulation step
+// ---------------------------------------------------------------------------
+function stepWorld(dt) {
+  simTime += dt;
+  weather.update(dt, sea, true);
+  block.firmness = pokes.firmness = firmness;
+  block.update(dt);
+  pokes.update(dt);
+  const [tx, tz] = block.seaTilt();
+  sea.tiltX = tx; sea.tiltZ = tz;
+  sea.adjustLevel(dt);
+
+  // Plunger: soft press, speed-limited sweep.
+  const target = plunger.active ? 0.3 : 0;
+  plunger.amp += (target - plunger.amp) * expDecay(dt, plunger.active ? 0.12 : 0.08);
+  const dx = plunger.tx - plunger.x, dz = plunger.tz - plunger.z, dl = Math.hypot(dx, dz), stp = Math.min(dl, 2.3 * dt);
+  if (dl > 1e-6) { plunger.x += (dx / dl) * stp; plunger.z += (dz / dl) * stp; }
+
+  sea.clearPressure();
+  if (plunger.amp > 0.002) sea.addBlob(plunger.x, plunger.z, plunger.amp, 0.26, true);
+  weather.applyChop(sea);
+  for (const f of floaters) f.addWake(sea);
+  whale.pushWater(sea);
+  if (raftSeal.splashPulse > 0 && raftSeal.pts) {
+    raftSeal.splashPulse -= dt;
+    sea.addBlob(raftSeal.pts[0][0], raftSeal.pts[0][2], 0.22, 0.16);
+  }
+  if (drag && drag.kind === 'glass' && drag.hand) {
+    // the sea leans gently toward the hand at the glass
+    const hx = drag.n[0] ? Math.sign(drag.n[0]) * (HX - 0.3) : drag.hand[0];
+    const hz = drag.n[2] ? Math.sign(drag.n[2]) * (HZ - 0.3) : drag.hand[1];
+    sea.addBlob(hx, hz, -0.035, 0.35);
+  }
+  sea.beginFrame();
+  simAcc += dt;
+  let n = 0;
+  while (simAcc >= SIM_DT && n < 8) { sea.step(SIM_DT); simAcc -= SIM_DT; n++; }
+  if (n === 8) simAcc = 0;
+  sea.refresh(dt);
+
+  const env = { windX: weather.wind[0], windZ: weather.wind[1] };
+  for (const f of floaters) f.update(dt, sea, env);
+  collideFloaters(floaters);
+  raftSeal.update(dt, simTime);
+  shoreSeal.update(dt, simTime);
+  whale.update(dt);
+  puffs.update(dt, weather.wind);
+}
+
+function buildDynamic() {
+  const mb = renderer ? renderer.dynBlock : scratchMB;
+  mb.reset();
+  whale.build(mb);
+  raftSeal.build(mb, simTime);
+  shoreSeal.build(mb);
+  buildRaft(mb, raft.matrix());
+  buildKayak(mb, kayak.matrix());
+  for (const f of floes) buildFloe(mb, f.matrix(), f.shape);
+  if (renderer) {
+    const wb = renderer.dynWorld; wb.reset();
+    buildJelly(wb, block.matrix, pokes.list);
+    renderer.uploadDynamic();
+  }
+}
+const scratchMB = new MeshBuilder(16000, 80000);
+
+function fillFrame() {
+  const f = renderer.frame, p = weather.p;
+  const L = p.sunDir;
+  const lightPos = V3.mul(L, 30);
+  const lv = M4.lookAt(lightPos, [0, -1, 0], Math.abs(L[1]) > 0.98 ? [0, 0, 1] : [0, 1, 0]);
+  const lvp = M4.mul(M4.ortho(-12, 12, -12, 12, 5, 60), lv);
+  f.set(view.VP, 0); f.set(view.inv, 16); f.set(lvp, 32); f.set(block.matrix, 48); f.set(block.inv, 64);
+  const v4 = (k, a, b, c, d) => { const o = 80 + k * 4; f[o] = a; f[o + 1] = b; f[o + 2] = c; f[o + 3] = d; };
+  const door = M4.point(block.matrix, renderer.doorPos), lamp = M4.point(block.matrix, renderer.lampPos);
+  v4(0, view.eye[0], view.eye[1], view.eye[2], simTime);
+  v4(1, L[0], L[1], L[2], p.sunI);
+  v4(2, p.sunCol[0], p.sunCol[1], p.sunCol[2], p.shadow);
+  v4(3, p.sky[0], p.sky[1], p.sky[2], p.skyI);
+  v4(4, p.gnd[0], p.gnd[1], p.gnd[2], p.exposure);
+  v4(5, p.backTop[0], p.backTop[1], p.backTop[2], weather.mode === 'aurora' ? 2 : weather.mode === 'snow' ? 1 : 0);
+  v4(6, p.backBot[0], p.backBot[1], p.backBot[2], p.night);
+  const flick = 1 + 0.05 * Math.sin(simTime * 13.1) * Math.sin(simTime * 7.3);
+  v4(7, door[0], door[1], door[2], 1.5 * p.door);
+  v4(8, 1.0, 0.6, 0.3, p.emit * flick);
+  v4(9, lamp[0], lamp[1], lamp[2], 1.25 * p.lamp * flick);
+  v4(10, 1.0, 0.7, 0.38, 0);
+  v4(11, sea.level, p.caustic, p.ripple, 1.0);
+  v4(12, renderer.width, renderer.height, 1 / renderer.width, 1 / renderer.height);
+  v4(13, weather.windOff[0], weather.windOff[1], weather.fall, weather.snowCount());
+  v4(14, p.snow, p.blizzard, p.night, weather.wind[0]);
+  v4(15, p.fog[0], p.fog[1], p.fog[2], 1.0);
+  v4(16, view.right[0], view.right[1], view.right[2], 0);
+  v4(17, view.up[0], view.up[1], view.up[2], 0);
+  v4(18, p.blizzard, 0.2, cam.yaw, 0);
+}
+
+// ---------------------------------------------------------------------------
+// UI
+// ---------------------------------------------------------------------------
+let firmness = 0.5;
+function setMode(m) {
+  weather.mode = m;
+  document.body.dataset.mode = m;
+  document.querySelectorAll('.segments button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+  updateStatus();
+}
+function setBlizzard(on) { weather.blizzard = on; $('blizzard').setAttribute('aria-checked', String(on)); updateStatus(); }
+function setPaused(on) {
+  paused = on;
+  $('pause').setAttribute('aria-pressed', String(on));
+  $('pause').textContent = on ? 'Resume' : 'Pause';
+  if (on) endDrag();
+  updateStatus();
+}
+function callWhale() {
+  whale.call();
+  const b = $('callWhale');
+  b.textContent = 'The whale is coming up';
+  clearTimeout(callWhale.timer);
+  callWhale.timer = setTimeout(() => { b.textContent = 'Call the whale'; }, 3500);
+}
+function cycleCamera() {
+  cam.preset = (cam.preset + 1) % CAMERAS.length;
+  const to = CAMERAS[cam.preset];
+  cam.tween = { t: 0, from: { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist }, to };
+  $('camera').textContent = to.name;
+  $('camera').title = 'Camera: ' + to.name + ' (click for the next view)';
+  clearTimeout(cycleCamera.timer);
+  cycleCamera.timer = setTimeout(() => { $('camera').textContent = 'Camera'; }, 1800);
+}
+function updateStatus() {
+  const el = $('status');
+  el.classList.toggle('is-paused', paused);
+  $('statusText').textContent = paused ? `Paused · ${MODE_NAMES[weather.mode]}` : `Live · sea at ${SIM_HZ} Hz · ${MODE_NAMES[weather.mode]}${weather.blizzard ? ', blizzard' : ''}`;
+}
+function updateReadouts() {
+  const st = sea.stats();
+  $('roSeal').textContent = raftSeal.label() + (shoreSeal.alert > 0.5 ? ' · shore seal on watch' : '');
+  let k;
+  if (kayak.held) k = 'Held, under tow';
+  else if (kayak.capsizing > 0) k = 'Rolling over';
+  else if (kayak.capsized) k = 'Capsized, upside down';
+  else k = `Upright · rocking ${Math.round((Math.abs(kayak.waveRoll) * 180) / Math.PI)}°`;
+  $('roKayak').textContent = k;
+  $('roWhale').textContent = whale.label();
+  const cm = st.swell * 100;
+  const word = cm < 1.5 ? 'Calm' : cm < 5 ? 'Ripples' : cm < 12 ? 'Swell' : 'Rough';
+  $('roSwell').textContent = `${word} · ${cm.toFixed(cm < 10 ? 1 : 0)} cm`;
+}
+
+document.querySelectorAll('.segments button').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+$('blizzard').addEventListener('click', () => setBlizzard(!weather.blizzard));
+$('firmness').addEventListener('input', (e) => { firmness = e.target.value / 100; $('firmnessOut').textContent = `${e.target.value}%`; });
+$('damping').addEventListener('input', (e) => { const v = e.target.value / 100; sea.gamma = 0.03 + 1.5 * v * v; $('dampingOut').textContent = `${e.target.value}%`; });
+$('tide').addEventListener('input', (e) => { const v = +e.target.value; sea.levelTarget = v / 100; $('tideOut').textContent = `${v > 0 ? '+' : v < 0 ? '−' : '±'}${Math.abs(v)} cm`; });
+$('callWhale').addEventListener('click', callWhale);
+$('pause').addEventListener('click', () => setPaused(!paused));
+$('reset').addEventListener('click', resetAll);
+$('camera').addEventListener('click', cycleCamera);
+$('panelToggle').addEventListener('click', () => {
+  const p = $('panel'), open = p.dataset.open !== 'true';
+  p.dataset.open = String(open);
+  $('panelToggle').setAttribute('aria-expanded', String(open));
+  document.body.classList.toggle('sheet-open', open);
+  // measure after the sheet has finished opening or closing
+  setTimeout(measureBand, 340); measureBand();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (e.key === ' ') { e.preventDefault(); setPaused(!paused); }
+  if (e.key === 'w' || e.key === 'W') callWhale();
+  if (e.key === 'r' || e.key === 'R') resetAll();
+  if (e.key === 'c' || e.key === 'C') cycleCamera();
+});
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => { document.documentElement.style.setProperty('--sheet-h', `${$('panel').offsetHeight}px`); measureBand(); }).observe($('panel'));
+}
+$('damping').dispatchEvent(new Event('input'));
+
+function showFallback(err) {
+  const box = $('fallback');
+  box.classList.add('is-shown');
+  if (err && err.code === 'shader') $('fallbackReason').textContent = 'WebGPU started, but one of the shaders did not compile on this device.';
+  else if (err && err.code === 'lost') $('fallbackReason').textContent = 'The WebGPU device was lost (the GPU may have been reset). Reload the page to start again.';
+  else if (err && err.code === 'pipeline') $('fallbackReason').textContent = 'WebGPU started, but this device rejected one of the render pipelines.';
+  $('fallbackDetail').textContent = err ? String(err.message || err).slice(0, 600) : '';
+  document.querySelector('.ui').style.display = 'none';
+}
+
+// ---------------------------------------------------------------------------
+// Frame loop
+// ---------------------------------------------------------------------------
+let last = performance.now(), roTimer = 0, fpsAcc = 0, fpsN = 0, fps = 0;
+function frame(now) {
+  if (!renderer) return;
+  requestAnimationFrame(frame);
+  if (window.__frostbay.holdRender) { last = now; return; }
+  const dt = clamp((now - last) / 1000, 0, 0.1);
+  last = now;
+  fpsAcc += dt; fpsN++;
+  if (fpsAcc > 1) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
+  const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+  renderer.resize(cssW, cssH, window.devicePixelRatio || 1);
+  if (!paused) stepWorld(Math.min(dt, 1 / 30));
+  else weather.update(dt, sea, false);
+  updateCamera(dt);
+  buildDynamic();
+  renderer.setBlockMatrix(block.matrix);
+  renderer.uploadState(sea.pack());
+  renderer.uploadPuffs(puffs.pack(renderer.puffData, block.matrix));
+  fillFrame();
+  renderer.render(weather.snowCount());
+  roTimer -= dt;
+  if (roTimer <= 0) { updateReadouts(); roTimer = 0.15; }
+}
+
+// Test and debugging hooks.
+window.__frostbay = {
+  sea, block, kayak, raft, floes, raftSeal, shoreSeal, whale, weather, puffs, cam, plunger, pokes,
+  get renderer() { return renderer; }, get paused() { return paused; }, get fps() { return fps; }, get simTime() { return simTime; },
+  get drag() { return drag ? drag.kind : null; }, get view() { return view; }, frameBand,
+  setMode, setBlizzard, setPaused, callWhale, resetAll, cycleCamera, stepWorld,
+  advance(seconds, dt = 1 / 60) { for (let t = 0; t < seconds; t += dt) { stepWorld(dt); if (Math.round(t / dt) % 2 === 0) buildDynamic(); } },
+  toScreen(tankPoint) { updateCamera(0); return toScreen(M4.point(block.matrix, tankPoint)); },
+  pick(x, y) { updateCamera(0); const p = pick(x, y); return p.hit ? { kind: p.hit.kind, t: p.hit.t } : null; },
+  stats: () => sea.stats(),
+};
+
+async function start() {
+  updateStatus();
+  measureBand();
+  updateCamera(0);
+  for (const f of floaters) f.y = sea.surfaceAt(f.x, f.z) + f.ride;
+  try {
+    renderer = await Renderer.create(canvas);
+    renderer.device.lost.then((info) => { if (info.reason !== 'destroyed') { renderer = null; showFallback(new FrostbayError('lost', info.message)); } });
+    window.__frostbay.ready = true;
+    last = performance.now();
+    requestAnimationFrame(frame);
+  } catch (err) {
+    console.error(err);
+    window.__frostbay.error = String(err && err.message || err);
+    showFallback(err);
+  }
+}
+start();
+</script>
+</body>
+</html>

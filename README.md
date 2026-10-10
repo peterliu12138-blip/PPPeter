@@ -1,10 +1,11 @@
 # PPPeter
 
-Personal webpage — currently a full-screen hero landing page for **Mainframe®**, a creative agency.
+Personal webpage. It currently holds two pages:
 
-Built with React, TypeScript, Vite and Tailwind CSS.
+- **Mainframe®** (`/`): a full-screen hero landing page for a creative agency, built with React, TypeScript, Vite and Tailwind CSS.
+- **Frostbay** (`/frostbay/`): a WebGPU diorama of a cold harbour in a glass block on jelly, with a live water simulation, seals, a kayak and a humpback whale. It is one self-contained file, `public/frostbay/index.html`, and needs a browser with WebGPU (Safari 26+, Chrome/Edge 113+).
 
-## Features
+## Mainframe features
 
 - Background video that scrubs forward/backward as the mouse moves horizontally
 - Fixed navbar with an animated hamburger and full-screen mobile menu
@@ -20,6 +21,14 @@ npm run build      # type-check and build for production
 npm run preview    # serve the production build
 ```
 
+## Frostbay
+
+- Height-field long-wave simulation (flux form, 200×140 grid, fixed 180 Hz substeps) that conserves volume and stays stable at every slider setting
+- Press the sea for a soft hollow with a raised rim, drag to sweep it; drag a glass side to tilt the block on its jelly; pull the jelly edge; drag the kayak
+- Raft seal that loses its balance, slips in, swims and hauls out; shore seal that basks, scratches and watches big waves; a humpback whose spine follows its own path
+- Daylight, Snowfall and Aurora night modes, plus a blizzard; HDR with 4× MSAA, refraction, depth absorption, caustics, soft shadows and neutral tone mapping
+- Open `public/frostbay/index.html` directly, or visit `/frostbay/` on the dev server or a deployed build
+
 ## Structure
 
 ```
@@ -32,4 +41,6 @@ src/
     useTypewriter.ts     # character-by-character text reveal
   App.tsx
   index.css              # Tailwind import, font variables, blink keyframes
+public/
+  frostbay/index.html    # Frostbay, self-contained (copied as-is into the build)
 ```

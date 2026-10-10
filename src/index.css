@@ -1,5 +1,8 @@
 @import 'tailwindcss';
 
+/* Frostbay is a standalone page with its own CSS; keep it out of Tailwind's class scan. */
+@source not '../public';
+
 @theme {
   --animate-blink: blink 1s step-end infinite;
 
